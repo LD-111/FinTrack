@@ -8,6 +8,7 @@ import {
   type Category,
   type MerchantMemory,
   type Transaction,
+  type ValuationLog,
 } from "@/lib/types";
 
 class FinTrackDB extends Dexie {
@@ -17,6 +18,7 @@ class FinTrackDB extends Dexie {
   budgets!: EntityTable<Budget, "id">;
   merchantMemory!: EntityTable<MerchantMemory, "id">;
   settings!: EntityTable<AppSettings, "id">;
+  valuationLogs!: EntityTable<ValuationLog, "id">;
 
   constructor() {
     super("fintrack");
@@ -71,6 +73,15 @@ class FinTrackDB extends Dexie {
           await trans.table("settings").put({ ...settings, defaultAccountId: DEFAULT_ACCOUNT_ID });
         }
       });
+    this.version(3).stores({
+      accounts: "id, type, slug, name",
+      categories: "id, kind, parentId, name",
+      transactions: "id, date, categoryId, merchantKey, kind, accountId, toAccountId, createdAt",
+      budgets: "id, categoryId",
+      merchantMemory: "id, merchantKey, categoryId",
+      settings: "id",
+      valuationLogs: "id, accountId, date, createdAt",
+    });
   }
 }
 

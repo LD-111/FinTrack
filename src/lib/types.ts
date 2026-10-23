@@ -1,8 +1,9 @@
 export type CategoryKind = "expense" | "income";
 export type TransactionKind = "expense" | "income" | "transfer";
-export type AccountType = "bank" | "cash" | "savings" | "investment";
+export type AccountType = "bank" | "cash" | "savings" | "investment" | "crypto" | "stock";
 export type BudgetPeriod = "monthly";
 export type AppView = "dashboard" | "transactions" | "budgets";
+export type DashboardTab = "cashflow" | "portfolio";
 export type CategorySource = "explicit" | "memory" | "fuzzy" | "uncategorized";
 
 export interface Category {
@@ -65,6 +66,23 @@ export interface AppSettings {
   locale: string;
   weekStartsOn: 0 | 1;
   defaultAccountId: string;
+}
+
+export interface ValuationLog {
+  id: string;
+  accountId: string;
+  valueCents: number;
+  date: string;
+  createdAt: string;
+}
+
+export interface PortfolioSnapshot {
+  account: Account;
+  investedPrincipalCents: number;
+  currentValueCents: number;
+  profitCents: number;
+  twrRatio: number;
+  lastValuation: ValuationLog | null;
 }
 
 export type ParsedQuickAdd =

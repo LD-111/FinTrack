@@ -8,5 +8,7 @@
 - Last successful account becomes `settings.defaultAccountId`.
 - Account CRUD: `createAccount`, `updateAccount`, `archiveAccount`. Do not delete an account that has transactions; do not archive the last active account.
 - `accountFilter` is shared so the sidebar can open Ledger on one account.
-- Undo stack (cap 20) covers add/update/delete transaction and budget upserts.
-- Derived month totals and account balances come from `src/lib/derived.ts`.
+- `dashboardTab` (`cashflow` | `portfolio`) and `selectedPortfolioAccountId` stay in context so the sidebar can open the Portfolio tab on a portfolio account.
+- Valuation logs: `addValuationLog`, `deleteValuationLog`. Optimistic write, then Dexie. UI never imports `db`.
+- Undo stack (cap 20) covers add/update/delete transaction, budget upserts, and valuation add/delete.
+- Derived month totals come from `src/lib/derived.ts`. Portfolio snapshots come from `src/lib/portfolio.ts`. Context overlays market value onto displayed `accountBalances` for portfolio accounts.

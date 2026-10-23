@@ -3,6 +3,7 @@ import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useFinance } from "@/context/FinanceContext";
+import { isPortfolioAccount } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, parseAmountToken } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,8 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
   { value: "cash", label: "Cash" },
   { value: "savings", label: "Savings" },
   { value: "investment", label: "Investment" },
+  { value: "crypto", label: "Crypto" },
+  { value: "stock", label: "Stock" },
 ];
 
 export function Sidebar() {
@@ -31,6 +34,10 @@ export function Sidebar() {
     accountBalances,
     accountFilter,
     setAccountFilter,
+    dashboardTab,
+    setDashboardTab,
+    selectedPortfolioAccountId,
+    setSelectedPortfolioAccountId,
     createAccount,
   } = useFinance();
   const netPositive = monthSummary.netCents >= 0;
@@ -134,7 +141,11 @@ export function Sidebar() {
 
         <div className="flex flex-col gap-0.5">
           {visibleBalances.map((row) => {
-            const active = accountFilter === row.account.id;
+            const portfolio = isPortfolioAccount(row.account);
+            const active = portfolio
+              ? (view === "dashboard" && dashboardTab === "portfolio" && selectedPortfolioAccountId === row.account.id) ||
+                (view === "transactions" && accountFilter === row.account.id)
+              : accountFilter === row.account.id;
             return (
               <button
                 key={row.account.id}
@@ -144,6 +155,12 @@ export function Sidebar() {
                   active && "bg-sidebar-accent text-sidebar-accent-foreground",
                 )}
                 onClick={() => {
+                  if (portfolio) {
+                    setSelectedPortfolioAccountId(row.account.id);
+                    setDashboardTab("portfolio");
+                    setView("dashboard");
+                    return;
+                  }
                   setAccountFilter(row.account.id);
                   setView("transactions");
                 }}

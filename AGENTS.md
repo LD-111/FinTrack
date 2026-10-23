@@ -15,11 +15,13 @@ Local-first desktop personal finance app. Absolute simplicity: faster and easier
 
 The packaged app is a static Vite `dist/` folder inside Tauri. All data lives in the WebView via IndexedDB. `FinanceContext` is the only persistence gateway. UI never imports `db` directly.
 
-Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a URL router.
+Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a URL router. Dashboard has a Cashflow | Portfolio tab (`dashboardTab` in context).
 
-Money is integer cents (`amountCents`, `openingBalanceCents`). Account balances are derived, never stored. Transaction `date` is local `YYYY-MM-DD`. Timestamps are ISO UTC.
+Money is integer cents (`amountCents`, `openingBalanceCents`, `valueCents`). Account balances and portfolio metrics are derived, never stored. Transaction `date` and valuation `date` are local `YYYY-MM-DD`. Timestamps are ISO UTC.
 
-Accounts are first-class (`bank` | `cash` | `savings` | `investment`). Transactions have `accountId`; transfers also have `toAccountId` and `kind: "transfer"`. Transfers do not count as income or spend.
+Accounts are first-class (`bank` | `cash` | `savings` | `investment` | `crypto` | `stock`). `investment`, `crypto`, and `stock` are portfolio accounts. Transactions have `accountId`; transfers also have `toAccountId` and `kind: "transfer"`. Transfers do not count as income or spend.
+
+Portfolio current value = latest valuation log + transfers after that log. Principal = opening + net transfers in − out. Profit = value − principal. Return % is time-weighted so new capital does not look like gain or loss. Sidebar shows market value for portfolio accounts.
 
 ## Run
 

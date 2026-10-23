@@ -1,37 +1,76 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { PortfolioPanel } from "@/components/dashboard/PortfolioPanel";
 import { VisualInsights } from "@/components/dashboard/VisualInsights";
 import { useFinance } from "@/context/FinanceContext";
-import { formatAccountLabel } from "@/lib/accounts";
+import { formatAccountLabel, isPortfolioAccount } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, formatSignedMoney } from "@/lib/money";
+import { cn } from "@/lib/utils";
 
 export function DashboardView() {
+  const { selectedMonth, settings, dashboardTab, setDashboardTab } = useFinance();
+  const onPortfolio = dashboardTab === "portfolio";
+  const monthLabel = formatMonthLabel(selectedMonth, settings.locale);
+
+  return (
+    <section className="flex-1 space-y-4 overflow-auto p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">{onPortfolio ? "Portfolio" : monthLabel}</h1>
+          <p className="text-sm text-muted-foreground">
+            {onPortfolio
+              ? "Market value versus money you put in. Log a total when prices move."
+              : "In, out, and what is left. Add from the bar — no forms."}
+          </p>
+        </div>
+        <div className="flex rounded-md border border-input p-0.5">
+          <TabButton label="Cashflow" active={!onPortfolio} onClick={() => setDashboardTab("cashflow")} />
+          <TabButton label="Portfolio" active={onPortfolio} onClick={() => setDashboardTab("portfolio")} />
+        </div>
+      </div>
+
+      {onPortfolio ? <PortfolioPanel /> : <CashflowBody />}
+    </section>
+  );
+}
+
+function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "rounded-sm px-3 py-1.5 text-sm",
+        active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+      )}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function CashflowBody() {
   const {
     monthSummary,
     categorySpend,
     transactions,
     settings,
-    selectedMonth,
     categoryById,
     accountById,
     accountBalances,
     setView,
     setAccountFilter,
+    setDashboardTab,
+    setSelectedPortfolioAccountId,
   } = useFinance();
   const recent = transactions.slice(0, 8);
   const trackedBudgets = categorySpend.filter((item) => item.budgetCents !== null);
-  const monthLabel = formatMonthLabel(selectedMonth, settings.locale);
   const visibleAccounts = accountBalances.filter((row) => !row.account.isArchived);
   const totalBalance = visibleAccounts.reduce((sum, row) => sum + row.balanceCents, 0);
 
   return (
-    <section className="flex-1 space-y-4 overflow-auto p-5">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">{monthLabel}</h1>
-        <p className="text-sm text-muted-foreground">In, out, and what is left. Add from the bar — no forms.</p>
-      </div>
-
+    <>
       <div className="grid gap-3 md:grid-cols-3">
         <StatCard
           title="Income"
@@ -70,6 +109,11 @@ export function DashboardView() {
                   type="button"
                   className="flex w-full items-center justify-between gap-3 text-sm"
                   onClick={() => {
+                    if (isPortfolioAccount(row.account)) {
+                      setSelectedPortfolioAccountId(row.account.id);
+                      setDashboardTab("portfolio");
+                      return;
+                    }
                     setAccountFilter(row.account.id);
                     setView("transactions");
                   }}
@@ -161,7 +205,7 @@ export function DashboardView() {
           </CardContent>
         </Card>
       </div>
-    </section>
+    </>
   );
 }
 

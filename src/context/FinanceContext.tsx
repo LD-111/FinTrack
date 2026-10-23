@@ -9,10 +9,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { matchAccountToken, uniqueAccountSlug } from "@/lib/accounts";
+import { isPortfolioAccount, matchAccountToken, uniqueAccountSlug } from "@/lib/accounts";
 import { toast } from "@/lib/toast";
 import { resolveCategory } from "@/lib/categorizer";
-import { currentYearMonth } from "@/lib/dates";
+import { currentYearMonth, todayISO } from "@/lib/dates";
 import { db } from "@/lib/db";
 import {
   accountBalances as deriveAccountBalances,
@@ -23,6 +23,8 @@ import {
   type MonthSummary,
 } from "@/lib/derived";
 import { parseQuickAdd } from "@/lib/parser";
+import { overlayPortfolioValues, portfolioSnapshots as derivePortfolioSnapshots } from "@/lib/portfolio";
+import { formatMoney } from "@/lib/money";
 import { DEFAULT_SETTINGS, seedIfEmpty } from "@/lib/seed";
 import type {
   Account,
@@ -31,10 +33,13 @@ import type {
   AppView,
   Budget,
   Category,
+  DashboardTab,
   MerchantMemory,
+  PortfolioSnapshot,
   QuickAddPreview,
   QuickAddResult,
   Transaction,
+  ValuationLog,
 } from "@/lib/types";
 import { DEFAULT_ACCOUNT_ID, TRANSFER_CATEGORY_ID } from "@/lib/types";
 import { newId, nowIso } from "@/lib/utils";
@@ -43,7 +48,9 @@ type UndoItem =
   | { type: "add-tx"; id: string; memoryId?: string; previousMemory?: MerchantMemory }
   | { type: "delete-tx"; transaction: Transaction }
   | { type: "update-tx"; previous: Transaction }
-  | { type: "upsert-budget"; previous: Budget | null; id: string };
+  | { type: "upsert-budget"; previous: Budget | null; id: string }
+  | { type: "add-valuation"; id: string }
+  | { type: "delete-valuation"; log: ValuationLog };
 
 export interface FinanceContextValue {
   hydrated: boolean;
@@ -53,15 +60,21 @@ export interface FinanceContextValue {
   setSelectedMonth: (month: string) => void;
   accountFilter: string;
   setAccountFilter: (accountId: string) => void;
+  dashboardTab: DashboardTab;
+  setDashboardTab: (tab: DashboardTab) => void;
+  selectedPortfolioAccountId: string | null;
+  setSelectedPortfolioAccountId: (accountId: string | null) => void;
   settings: AppSettings;
   categories: Category[];
   accounts: Account[];
   transactions: Transaction[];
   budgets: Budget[];
   merchantMemory: MerchantMemory[];
+  valuationLogs: ValuationLog[];
   monthSummary: MonthSummary;
   categorySpend: CategorySpend[];
   accountBalances: AccountBalance[];
+  portfolioSnapshots: PortfolioSnapshot[];
   quickAddRef: RefObject<HTMLInputElement | null>;
   previewQuickAdd: (raw: string) => QuickAddPreview;
   addTransactionFromQuickAdd: (raw: string) => QuickAddResult;
@@ -70,6 +83,8 @@ export interface FinanceContextValue {
   createAccount: (input: { name: string; type: AccountType; openingBalanceCents?: number }) => Promise<Account | null>;
   updateAccount: (id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) => Promise<void>;
   archiveAccount: (id: string) => Promise<void>;
+  addValuationLog: (input: { accountId: string; valueCents: number; date?: string }) => Promise<ValuationLog | null>;
+  deleteValuationLog: (id: string) => Promise<void>;
   upsertBudget: (categoryId: string, amountCents: number) => Promise<void>;
   deleteBudget: (id: string) => Promise<void>;
   undo: () => Promise<boolean>;
@@ -85,12 +100,15 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<AppView>("dashboard");
   const [selectedMonth, setSelectedMonth] = useState(currentYearMonth);
   const [accountFilter, setAccountFilter] = useState("all");
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>("cashflow");
+  const [selectedPortfolioAccountId, setSelectedPortfolioAccountId] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [merchantMemory, setMerchantMemory] = useState<MerchantMemory[]>([]);
+  const [valuationLogs, setValuationLogs] = useState<ValuationLog[]>([]);
   const quickAddRef = useRef<HTMLInputElement | null>(null);
   const undoStack = useRef<UndoItem[]>([]);
 
@@ -103,7 +121,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       await seedIfEmpty();
-      const [nextCategories, nextAccounts, nextTransactions, nextBudgets, nextMemory, nextSettings] =
+      const [nextCategories, nextAccounts, nextTransactions, nextBudgets, nextMemory, nextSettings, nextLogs] =
         await Promise.all([
           db.categories.toArray(),
           db.accounts.toArray(),
@@ -111,6 +129,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
           db.budgets.toArray(),
           db.merchantMemory.toArray(),
           db.settings.get("default"),
+          db.valuationLogs.toArray(),
         ]);
 
       if (cancelled) return;
@@ -119,11 +138,14 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       setTransactions(nextTransactions);
       setBudgets(nextBudgets);
       setMerchantMemory(nextMemory);
+      setValuationLogs(nextLogs);
       setSettings({
         ...DEFAULT_SETTINGS,
         ...nextSettings,
         defaultAccountId: nextSettings?.defaultAccountId ?? DEFAULT_ACCOUNT_ID,
       });
+      const firstPortfolio = nextAccounts.find((account) => !account.isArchived && isPortfolioAccount(account));
+      setSelectedPortfolioAccountId(firstPortfolio?.id ?? null);
       setHydrated(true);
     }
 
@@ -427,8 +449,72 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       if (accountFilter === id) {
         setAccountFilter("all");
       }
+      if (selectedPortfolioAccountId === id) {
+        const nextPortfolio = active.find((account) => isPortfolioAccount(account));
+        setSelectedPortfolioAccountId(nextPortfolio?.id ?? null);
+      }
     },
-    [accountFilter, accounts, persistDefaultAccount, settings.defaultAccountId],
+    [accountFilter, accounts, persistDefaultAccount, selectedPortfolioAccountId, settings.defaultAccountId],
+  );
+
+  const addValuationLog = useCallback(
+    async (input: { accountId: string; valueCents: number; date?: string }) => {
+      if (!input.accountId || !Number.isFinite(input.valueCents) || input.valueCents < 0) {
+        return null;
+      }
+
+      const log: ValuationLog = {
+        id: newId(),
+        accountId: input.accountId,
+        valueCents: input.valueCents,
+        date: input.date ?? todayISO(),
+        createdAt: nowIso(),
+      };
+      setValuationLogs((current) => [...current, log]);
+      await db.valuationLogs.put(log);
+      pushUndo({ type: "add-valuation", id: log.id });
+      toast("Value logged", {
+        description: formatMoney(log.valueCents, settings.currency, settings.locale),
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              undoStack.current = undoStack.current.filter(
+                (item) => !(item.type === "add-valuation" && item.id === log.id),
+              );
+              setValuationLogs((current) => current.filter((item) => item.id !== log.id));
+              await db.valuationLogs.delete(log.id);
+            })();
+          },
+        },
+        duration: 5000,
+      });
+      return log;
+    },
+    [pushUndo, settings.currency, settings.locale],
+  );
+
+  const deleteValuationLog = useCallback(
+    async (id: string) => {
+      const previous = valuationLogs.find((log) => log.id === id);
+      if (!previous) return;
+      setValuationLogs((current) => current.filter((log) => log.id !== id));
+      await db.valuationLogs.delete(id);
+      pushUndo({ type: "delete-valuation", log: previous });
+      toast("Valuation removed", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              setValuationLogs((current) => [...current, previous]);
+              await db.valuationLogs.put(previous);
+            })();
+          },
+        },
+        duration: 5000,
+      });
+    },
+    [pushUndo, valuationLogs],
   );
 
   const upsertBudget = useCallback(
@@ -510,6 +596,18 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       return true;
     }
 
+    if (item.type === "add-valuation") {
+      setValuationLogs((current) => current.filter((log) => log.id !== item.id));
+      await db.valuationLogs.delete(item.id);
+      return true;
+    }
+
+    if (item.type === "delete-valuation") {
+      setValuationLogs((current) => [...current, item.log]);
+      await db.valuationLogs.put(item.log);
+      return true;
+    }
+
     const previousBudget = item.previous;
     if (previousBudget) {
       setBudgets((current) => {
@@ -542,10 +640,23 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     [budgets, categories, selectedMonth, transactions],
   );
 
-  const accountBalanceRows = useMemo(
-    () => deriveAccountBalances(accounts, transactions),
-    [accounts, transactions],
+  const portfolioSnapshotRows = useMemo(
+    () => derivePortfolioSnapshots(accounts, transactions, valuationLogs),
+    [accounts, transactions, valuationLogs],
   );
+
+  const accountBalanceRows = useMemo(
+    () => overlayPortfolioValues(deriveAccountBalances(accounts, transactions), portfolioSnapshotRows),
+    [accounts, portfolioSnapshotRows, transactions],
+  );
+
+  useEffect(() => {
+    const active = accounts.filter((account) => !account.isArchived && isPortfolioAccount(account));
+    if (selectedPortfolioAccountId && active.some((account) => account.id === selectedPortfolioAccountId)) {
+      return;
+    }
+    setSelectedPortfolioAccountId(active[0]?.id ?? null);
+  }, [accounts, selectedPortfolioAccountId]);
 
   const value = useMemo<FinanceContextValue>(
     () => ({
@@ -556,15 +667,21 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       setSelectedMonth,
       accountFilter,
       setAccountFilter,
+      dashboardTab,
+      setDashboardTab,
+      selectedPortfolioAccountId,
+      setSelectedPortfolioAccountId,
       settings,
       categories,
       accounts,
       transactions,
       budgets,
       merchantMemory,
+      valuationLogs,
       monthSummary,
       categorySpend,
       accountBalances: accountBalanceRows,
+      portfolioSnapshots: portfolioSnapshotRows,
       quickAddRef,
       previewQuickAdd,
       addTransactionFromQuickAdd,
@@ -573,6 +690,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       createAccount,
       updateAccount,
       archiveAccount,
+      addValuationLog,
+      deleteValuationLog,
       upsertBudget,
       deleteBudget,
       undo,
@@ -586,26 +705,32 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       accountFilter,
       accounts,
       addTransactionFromQuickAdd,
+      addValuationLog,
       archiveAccount,
       budgets,
       categories,
       categoryById,
       categorySpend,
       createAccount,
+      dashboardTab,
       deleteBudget,
       deleteTransaction,
+      deleteValuationLog,
       focusQuickAdd,
       hydrated,
       merchantMemory,
       monthSummary,
+      portfolioSnapshotRows,
       previewQuickAdd,
       selectedMonth,
+      selectedPortfolioAccountId,
       settings,
       transactions,
       undo,
       updateAccount,
       updateTransaction,
       upsertBudget,
+      valuationLogs,
       view,
     ],
   );

@@ -1,5 +1,24 @@
-import type { Account, Transaction } from "@/lib/types";
+import type { Account, AccountType, Transaction } from "@/lib/types";
 import { toMerchantKey } from "@/lib/utils";
+
+export const PORTFOLIO_ACCOUNT_TYPES: AccountType[] = ["investment", "crypto", "stock"];
+
+const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  bank: "Bank",
+  cash: "Cash",
+  savings: "Savings",
+  investment: "Investment",
+  crypto: "Crypto",
+  stock: "Stock",
+};
+
+export function isPortfolioAccount(account: Pick<Account, "type">): boolean {
+  return PORTFOLIO_ACCOUNT_TYPES.includes(account.type);
+}
+
+export function formatAccountType(type: AccountType): string {
+  return ACCOUNT_TYPE_LABELS[type];
+}
 
 export function toAccountSlug(name: string): string {
   return toMerchantKey(name);
