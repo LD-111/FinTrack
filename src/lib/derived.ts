@@ -1,11 +1,16 @@
 import { addDays, todayISO } from "@/lib/dates";
-import type { Budget, Category, Transaction } from "@/lib/types";
+import type { Account, Budget, Category, Transaction } from "@/lib/types";
 
 export interface MonthSummary {
   yearMonth: string;
   incomeCents: number;
   expenseCents: number;
   netCents: number;
+}
+
+export interface AccountBalance {
+  account: Account;
+  balanceCents: number;
 }
 
 export function filterByMonth(transactions: Transaction[], yearMonth: string): Transaction[] {
@@ -15,6 +20,7 @@ export function filterByMonth(transactions: Transaction[], yearMonth: string): T
 export function summarizeMonth(transactions: Transaction[], yearMonth: string): MonthSummary {
   return filterByMonth(transactions, yearMonth).reduce<MonthSummary>(
     (summary, transaction) => {
+      if (transaction.kind === "transfer") return summary;
       if (transaction.kind === "income") {
         summary.incomeCents += transaction.amountCents;
       } else {
@@ -72,4 +78,28 @@ export function dailySpend(transactions: Transaction[], days = 30): { date: stri
   }
 
   return [...totals.entries()].map(([date, cents]) => ({ date, cents }));
+}
+
+export function accountBalances(accounts: Account[], transactions: Transaction[]): AccountBalance[] {
+  const totals = new Map(accounts.map((account) => [account.id, account.openingBalanceCents]));
+
+  for (const transaction of transactions) {
+    if (transaction.kind === "income") {
+      totals.set(transaction.accountId, (totals.get(transaction.accountId) ?? 0) + transaction.amountCents);
+      continue;
+    }
+    if (transaction.kind === "expense") {
+      totals.set(transaction.accountId, (totals.get(transaction.accountId) ?? 0) - transaction.amountCents);
+      continue;
+    }
+    totals.set(transaction.accountId, (totals.get(transaction.accountId) ?? 0) - transaction.amountCents);
+    if (transaction.toAccountId) {
+      totals.set(transaction.toAccountId, (totals.get(transaction.toAccountId) ?? 0) + transaction.amountCents);
+    }
+  }
+
+  return accounts.map((account) => ({
+    account,
+    balanceCents: totals.get(account.id) ?? account.openingBalanceCents,
+  }));
 }

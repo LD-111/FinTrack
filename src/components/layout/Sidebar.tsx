@@ -1,10 +1,12 @@
-import { LayoutDashboard, List, Wallet } from "lucide-react";
+import { useState } from "react";
+import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useFinance } from "@/context/FinanceContext";
 import { formatMonthLabel } from "@/lib/dates";
-import { formatMoney } from "@/lib/money";
+import { formatMoney, parseAmountToken } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { AppView } from "@/lib/types";
+import type { AccountType, AppView } from "@/lib/types";
 
 const NAV: { view: AppView; label: string; shortcut: string; icon: typeof LayoutDashboard }[] = [
   { view: "dashboard", label: "Dashboard", shortcut: "1", icon: LayoutDashboard },
@@ -12,9 +14,45 @@ const NAV: { view: AppView; label: string; shortcut: string; icon: typeof Layout
   { view: "budgets", label: "Budgets", shortcut: "3", icon: Wallet },
 ];
 
+const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
+  { value: "bank", label: "Bank" },
+  { value: "cash", label: "Cash" },
+  { value: "savings", label: "Savings" },
+  { value: "investment", label: "Investment" },
+];
+
 export function Sidebar() {
-  const { view, setView, monthSummary, selectedMonth, settings } = useFinance();
+  const {
+    view,
+    setView,
+    monthSummary,
+    selectedMonth,
+    settings,
+    accountBalances,
+    accountFilter,
+    setAccountFilter,
+    createAccount,
+  } = useFinance();
   const netPositive = monthSummary.netCents >= 0;
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [type, setType] = useState<AccountType>("bank");
+  const [opening, setOpening] = useState("");
+
+  const visibleBalances = accountBalances.filter((row) => !row.account.isArchived);
+
+  async function submitAccount() {
+    const created = await createAccount({
+      name,
+      type,
+      openingBalanceCents: parseAmountToken(opening) ?? 0,
+    });
+    if (!created) return;
+    setName("");
+    setType("bank");
+    setOpening("");
+    setCreating(false);
+  }
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -23,7 +61,7 @@ export function Sidebar() {
         <p className="text-xs text-sidebar-foreground/60">Local ledger</p>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1 px-2">
+      <nav className="flex flex-col gap-1 px-2">
         {NAV.map((item) => {
           const Icon = item.icon;
           const active = view === item.view;
@@ -41,6 +79,84 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      <div className="mt-4 min-h-0 flex-1 overflow-auto px-2">
+        <div className="mb-1 flex items-center justify-between px-2">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-sidebar-foreground/45">Accounts</p>
+          <Button
+            variant="sidebar"
+            size="icon"
+            className="size-6"
+            aria-label="Add account"
+            onClick={() => setCreating((current) => !current)}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        </div>
+
+        {creating && (
+          <form
+            className="mb-2 space-y-2 rounded-md bg-sidebar-accent/50 p-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitAccount();
+            }}
+          >
+            <Input
+              value={name}
+              autoFocus
+              placeholder="Name"
+              className="h-8 bg-background/10 text-sidebar-foreground placeholder:text-sidebar-foreground/40"
+              onChange={(event) => setName(event.target.value)}
+            />
+            <select
+              value={type}
+              className="h-8 w-full rounded-md border border-input bg-background/10 px-2 text-xs"
+              onChange={(event) => setType(event.target.value as AccountType)}
+            >
+              {ACCOUNT_TYPES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <Input
+              value={opening}
+              placeholder="Opening 0.00"
+              className="h-8 bg-background/10 text-sidebar-foreground placeholder:text-sidebar-foreground/40"
+              onChange={(event) => setOpening(event.target.value)}
+            />
+            <Button type="submit" size="sm" className="w-full">
+              Add
+            </Button>
+          </form>
+        )}
+
+        <div className="flex flex-col gap-0.5">
+          {visibleBalances.map((row) => {
+            const active = accountFilter === row.account.id;
+            return (
+              <button
+                key={row.account.id}
+                type="button"
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent",
+                  active && "bg-sidebar-accent text-sidebar-accent-foreground",
+                )}
+                onClick={() => {
+                  setAccountFilter(row.account.id);
+                  setView("transactions");
+                }}
+              >
+                <span className="min-w-0 flex-1 truncate">{row.account.name}</span>
+                <span className="tabular-nums text-sidebar-foreground/70">
+                  {formatMoney(row.balanceCents, settings.currency, settings.locale, "auto")}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="border-t border-sidebar-border px-4 py-4">
         <p className="text-xs text-sidebar-foreground/55">

@@ -37,10 +37,13 @@ export function formatMoney(
 
 export function formatSignedMoney(
   cents: number,
-  kind: "expense" | "income",
+  kind: "expense" | "income" | "transfer",
   currency: string,
   locale: string,
 ): string {
+  if (kind === "transfer") {
+    return formatMoney(cents, currency, locale, "never");
+  }
   const signed = kind === "expense" ? -cents : cents;
   return formatMoney(signed, currency, locale, "auto");
 }

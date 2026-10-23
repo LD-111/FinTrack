@@ -1,12 +1,42 @@
 import { db } from "@/lib/db";
 import { nowIso } from "@/lib/utils";
-import { UNCATEGORIZED_ID, type AppSettings, type Category } from "@/lib/types";
+import {
+  DEFAULT_ACCOUNT_ID,
+  TRANSFER_CATEGORY_ID,
+  UNCATEGORIZED_ID,
+  type Account,
+  type AppSettings,
+  type Category,
+} from "@/lib/types";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   id: "default",
   currency: "USD",
   locale: "en-US",
   weekStartsOn: 0,
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+};
+
+export const DEFAULT_CASH_ACCOUNT: Account = {
+  id: DEFAULT_ACCOUNT_ID,
+  name: "Cash",
+  type: "cash",
+  slug: "cash",
+  openingBalanceCents: 0,
+  isArchived: false,
+  createdAt: nowIso(),
+  updatedAt: nowIso(),
+};
+
+export const TRANSFER_CATEGORY: Category = {
+  id: TRANSFER_CATEGORY_ID,
+  name: "Transfer",
+  kind: "expense",
+  color: "#64748b",
+  icon: "ArrowLeftRight",
+  parentId: null,
+  isArchived: true,
+  createdAt: nowIso(),
 };
 
 export const DEFAULT_CATEGORIES: Category[] = [
@@ -23,20 +53,41 @@ export const DEFAULT_CATEGORIES: Category[] = [
   { id: "cat_other", name: "Other", kind: "expense", color: "#64748b", icon: "MoreHorizontal", parentId: null, isArchived: false, createdAt: nowIso() },
   { id: "cat_salary", name: "Salary", kind: "income", color: "#22c55e", icon: "Banknote", parentId: null, isArchived: false, createdAt: nowIso() },
   { id: "cat_other_income", name: "Other income", kind: "income", color: "#14b8a6", icon: "Coins", parentId: null, isArchived: false, createdAt: nowIso() },
+  TRANSFER_CATEGORY,
 ];
 
 export async function seedIfEmpty(): Promise<void> {
   const count = await db.categories.count();
-  if (count > 0) {
-    const settings = await db.settings.get("default");
-    if (!settings) {
+  if (count === 0) {
+    await db.transaction("rw", db.categories, db.settings, db.accounts, async () => {
+      await db.categories.bulkAdd(DEFAULT_CATEGORIES);
+      await db.accounts.put(DEFAULT_CASH_ACCOUNT);
       await db.settings.put(DEFAULT_SETTINGS);
-    }
+    });
     return;
   }
 
-  await db.transaction("rw", db.categories, db.settings, async () => {
-    await db.categories.bulkAdd(DEFAULT_CATEGORIES);
+  const transfer = await db.categories.get(TRANSFER_CATEGORY_ID);
+  if (!transfer) {
+    await db.categories.put(TRANSFER_CATEGORY);
+  }
+
+  const accountCount = await db.accounts.count();
+  if (accountCount === 0) {
+    await db.accounts.put(DEFAULT_CASH_ACCOUNT);
+    await db.transactions.toCollection().modify((transaction) => {
+      if (!transaction.accountId) {
+        transaction.accountId = DEFAULT_ACCOUNT_ID;
+      }
+    });
+  }
+
+  const settings = await db.settings.get("default");
+  if (!settings) {
     await db.settings.put(DEFAULT_SETTINGS);
-  });
+    return;
+  }
+  if (!settings.defaultAccountId) {
+    await db.settings.put({ ...settings, defaultAccountId: DEFAULT_ACCOUNT_ID });
+  }
 }

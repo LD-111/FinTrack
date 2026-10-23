@@ -1,4 +1,6 @@
 export type CategoryKind = "expense" | "income";
+export type TransactionKind = "expense" | "income" | "transfer";
+export type AccountType = "bank" | "cash" | "savings" | "investment";
 export type BudgetPeriod = "monthly";
 export type AppView = "dashboard" | "transactions" | "budgets";
 export type CategorySource = "explicit" | "memory" | "fuzzy" | "uncategorized";
@@ -14,10 +16,23 @@ export interface Category {
   createdAt: string;
 }
 
+export interface Account {
+  id: string;
+  name: string;
+  type: AccountType;
+  slug: string;
+  openingBalanceCents: number;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Transaction {
   id: string;
   amountCents: number;
-  kind: CategoryKind;
+  kind: TransactionKind;
+  accountId: string;
+  toAccountId?: string;
   description: string;
   merchantKey: string;
   categoryId: string;
@@ -49,16 +64,19 @@ export interface AppSettings {
   currency: string;
   locale: string;
   weekStartsOn: 0 | 1;
+  defaultAccountId: string;
 }
 
 export type ParsedQuickAdd =
   | {
       ok: true;
       amountCents: number;
-      kind: CategoryKind;
+      kind: TransactionKind;
       description: string;
       merchantKey: string;
       categoryToken?: string;
+      accountToken?: string;
+      toAccountToken?: string;
       date: string;
     }
   | { ok: false; reason: string };
@@ -68,12 +86,16 @@ export interface QuickAddPreview {
   valid: boolean;
   reason?: string;
   amountCents?: number;
-  kind?: CategoryKind;
+  kind?: TransactionKind;
   description?: string;
   merchantKey?: string;
   categoryId?: string;
   categoryName?: string;
   categorySource?: CategorySource;
+  accountId?: string;
+  accountName?: string;
+  toAccountId?: string;
+  toAccountName?: string;
   date?: string;
 }
 
@@ -82,3 +104,5 @@ export type QuickAddResult =
   | { ok: false; reason: string };
 
 export const UNCATEGORIZED_ID = "cat_uncategorized";
+export const TRANSFER_CATEGORY_ID = "cat_transfer";
+export const DEFAULT_ACCOUNT_ID = "acct_cash";

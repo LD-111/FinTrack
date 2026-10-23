@@ -9,14 +9,24 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { matchAccountToken, uniqueAccountSlug } from "@/lib/accounts";
 import { toast } from "@/lib/toast";
 import { resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth } from "@/lib/dates";
 import { db } from "@/lib/db";
-import { categorySpendForMonth, summarizeMonth, type CategorySpend, type MonthSummary } from "@/lib/derived";
+import {
+  accountBalances as deriveAccountBalances,
+  categorySpendForMonth,
+  summarizeMonth,
+  type AccountBalance,
+  type CategorySpend,
+  type MonthSummary,
+} from "@/lib/derived";
 import { parseQuickAdd } from "@/lib/parser";
 import { DEFAULT_SETTINGS, seedIfEmpty } from "@/lib/seed";
 import type {
+  Account,
+  AccountType,
   AppSettings,
   AppView,
   Budget,
@@ -26,6 +36,7 @@ import type {
   QuickAddResult,
   Transaction,
 } from "@/lib/types";
+import { DEFAULT_ACCOUNT_ID, TRANSFER_CATEGORY_ID } from "@/lib/types";
 import { newId, nowIso } from "@/lib/utils";
 
 type UndoItem =
@@ -40,23 +51,31 @@ export interface FinanceContextValue {
   setView: (view: AppView) => void;
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
+  accountFilter: string;
+  setAccountFilter: (accountId: string) => void;
   settings: AppSettings;
   categories: Category[];
+  accounts: Account[];
   transactions: Transaction[];
   budgets: Budget[];
   merchantMemory: MerchantMemory[];
   monthSummary: MonthSummary;
   categorySpend: CategorySpend[];
+  accountBalances: AccountBalance[];
   quickAddRef: RefObject<HTMLInputElement | null>;
   previewQuickAdd: (raw: string) => QuickAddPreview;
   addTransactionFromQuickAdd: (raw: string) => QuickAddResult;
   updateTransaction: (id: string, patch: Partial<Omit<Transaction, "id" | "createdAt">>) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
+  createAccount: (input: { name: string; type: AccountType; openingBalanceCents?: number }) => Promise<Account | null>;
+  updateAccount: (id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) => Promise<void>;
+  archiveAccount: (id: string) => Promise<void>;
   upsertBudget: (categoryId: string, amountCents: number) => Promise<void>;
   deleteBudget: (id: string) => Promise<void>;
   undo: () => Promise<boolean>;
   focusQuickAdd: () => void;
   categoryById: (id: string) => Category | undefined;
+  accountById: (id: string) => Account | undefined;
 }
 
 const FinanceContext = createContext<FinanceContextValue | null>(null);
@@ -65,8 +84,10 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [view, setView] = useState<AppView>("dashboard");
   const [selectedMonth, setSelectedMonth] = useState(currentYearMonth);
+  const [accountFilter, setAccountFilter] = useState("all");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [merchantMemory, setMerchantMemory] = useState<MerchantMemory[]>([]);
@@ -82,9 +103,10 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       await seedIfEmpty();
-      const [nextCategories, nextTransactions, nextBudgets, nextMemory, nextSettings] =
+      const [nextCategories, nextAccounts, nextTransactions, nextBudgets, nextMemory, nextSettings] =
         await Promise.all([
           db.categories.toArray(),
+          db.accounts.toArray(),
           db.transactions.orderBy("date").reverse().toArray(),
           db.budgets.toArray(),
           db.merchantMemory.toArray(),
@@ -93,10 +115,15 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
       if (cancelled) return;
       setCategories(nextCategories);
+      setAccounts(nextAccounts);
       setTransactions(nextTransactions);
       setBudgets(nextBudgets);
       setMerchantMemory(nextMemory);
-      setSettings(nextSettings ?? DEFAULT_SETTINGS);
+      setSettings({
+        ...DEFAULT_SETTINGS,
+        ...nextSettings,
+        defaultAccountId: nextSettings?.defaultAccountId ?? DEFAULT_ACCOUNT_ID,
+      });
       setHydrated(true);
     }
 
@@ -111,11 +138,67 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     [categories],
   );
 
+  const accountById = useCallback(
+    (id: string) => accounts.find((account) => account.id === id),
+    [accounts],
+  );
+
+  const persistDefaultAccount = useCallback(
+    async (accountId: string) => {
+      if (!accountId || settings.defaultAccountId === accountId) return;
+      const next: AppSettings = { ...settings, defaultAccountId: accountId };
+      setSettings(next);
+      await db.settings.put(next);
+    },
+    [settings],
+  );
+
   const previewQuickAdd = useCallback(
     (raw: string): QuickAddPreview => {
       const parsed = parseQuickAdd(raw);
       if (!parsed.ok) {
         return { raw, valid: false, reason: parsed.reason };
+      }
+
+      const fallbackAccount =
+        accountById(settings.defaultAccountId) ?? accounts.find((account) => !account.isArchived);
+
+      if (parsed.kind === "transfer") {
+        const from = parsed.accountToken ? matchAccountToken(parsed.accountToken, accounts) : undefined;
+        const to = parsed.toAccountToken ? matchAccountToken(parsed.toAccountToken, accounts) : undefined;
+        if (!from || !to) {
+          return { raw, valid: false, reason: "Unknown account" };
+        }
+        if (from.id === to.id) {
+          return { raw, valid: false, reason: "Pick two different accounts" };
+        }
+
+        const description = parsed.description || `${from.name} → ${to.name}`;
+        return {
+          raw,
+          valid: true,
+          amountCents: parsed.amountCents,
+          kind: "transfer",
+          description,
+          merchantKey: parsed.merchantKey,
+          categoryId: TRANSFER_CATEGORY_ID,
+          categoryName: "Transfer",
+          accountId: from.id,
+          accountName: from.name,
+          toAccountId: to.id,
+          toAccountName: to.name,
+          date: parsed.date,
+        };
+      }
+
+      const account = parsed.accountToken
+        ? matchAccountToken(parsed.accountToken, accounts)
+        : fallbackAccount;
+      if (parsed.accountToken && !account) {
+        return { raw, valid: false, reason: `No account matches #${parsed.accountToken}` };
+      }
+      if (!account) {
+        return { raw, valid: false, reason: "Add an account first" };
       }
 
       const resolved = resolveCategory({
@@ -135,10 +218,12 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         categoryId: resolved.categoryId,
         categoryName: categoryById(resolved.categoryId)?.name ?? "Uncategorized",
         categorySource: resolved.source,
+        accountId: account.id,
+        accountName: account.name,
         date: parsed.date,
       };
     },
-    [categories, categoryById, merchantMemory],
+    [accountById, accounts, categories, categoryById, merchantMemory, settings.defaultAccountId],
   );
 
   const rememberMerchant = useCallback(
@@ -178,8 +263,19 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   const addTransactionFromQuickAdd = useCallback(
     (raw: string): QuickAddResult => {
       const preview = previewQuickAdd(raw);
-      if (!preview.valid || !preview.amountCents || !preview.kind || !preview.description || !preview.date || !preview.categoryId) {
+      if (
+        !preview.valid ||
+        !preview.amountCents ||
+        !preview.kind ||
+        !preview.description ||
+        !preview.date ||
+        !preview.categoryId ||
+        !preview.accountId
+      ) {
         return { ok: false, reason: preview.reason ?? "Need an amount" };
+      }
+      if (preview.kind === "transfer" && !preview.toAccountId) {
+        return { ok: false, reason: preview.reason ?? "Transfer needs #from and #to" };
       }
 
       const stamp = nowIso();
@@ -187,6 +283,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         id: newId(),
         amountCents: preview.amountCents,
         kind: preview.kind,
+        accountId: preview.accountId,
+        toAccountId: preview.kind === "transfer" ? preview.toAccountId : undefined,
         description: preview.description,
         merchantKey: preview.merchantKey ?? "",
         categoryId: preview.categoryId,
@@ -197,9 +295,14 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
       setTransactions((current) => [transaction, ...current]);
       void db.transactions.put(transaction);
-      void rememberMerchant(transaction.merchantKey, transaction.categoryId).then((memory) => {
-        pushUndo({ type: "add-tx", id: transaction.id, ...memory });
-      });
+      void persistDefaultAccount(transaction.accountId);
+      if (transaction.kind !== "transfer") {
+        void rememberMerchant(transaction.merchantKey, transaction.categoryId).then((memory) => {
+          pushUndo({ type: "add-tx", id: transaction.id, ...memory });
+        });
+      } else {
+        pushUndo({ type: "add-tx", id: transaction.id });
+      }
 
       toast("Added", {
         description: transaction.description,
@@ -218,7 +321,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
       return { ok: true, transaction };
     },
-    [previewQuickAdd, pushUndo, rememberMerchant],
+    [persistDefaultAccount, previewQuickAdd, pushUndo, rememberMerchant],
   );
 
   const updateTransaction = useCallback(
@@ -235,7 +338,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       await db.transactions.put(next);
       pushUndo({ type: "update-tx", previous });
 
-      if (patch.categoryId && next.merchantKey) {
+      if (patch.categoryId && next.merchantKey && next.kind !== "transfer") {
         await rememberMerchant(next.merchantKey, next.categoryId);
       }
     },
@@ -264,6 +367,68 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       });
     },
     [pushUndo, transactions],
+  );
+
+  const createAccount = useCallback(
+    async (input: { name: string; type: AccountType; openingBalanceCents?: number }) => {
+      const name = input.name.trim();
+      if (!name) return null;
+
+      const stamp = nowIso();
+      const account: Account = {
+        id: newId(),
+        name,
+        type: input.type,
+        slug: uniqueAccountSlug(name, accounts),
+        openingBalanceCents: input.openingBalanceCents ?? 0,
+        isArchived: false,
+        createdAt: stamp,
+        updatedAt: stamp,
+      };
+      setAccounts((current) => [...current, account]);
+      await db.accounts.put(account);
+      return account;
+    },
+    [accounts],
+  );
+
+  const updateAccount = useCallback(
+    async (id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) => {
+      const previous = accounts.find((account) => account.id === id);
+      if (!previous) return;
+
+      const next: Account = {
+        ...previous,
+        ...patch,
+        slug: patch.name ? uniqueAccountSlug(patch.name, accounts.filter((account) => account.id !== id)) : previous.slug,
+        updatedAt: nowIso(),
+      };
+      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      await db.accounts.put(next);
+    },
+    [accounts],
+  );
+
+  const archiveAccount = useCallback(
+    async (id: string) => {
+      const previous = accounts.find((account) => account.id === id);
+      if (!previous || previous.isArchived) return;
+
+      const active = accounts.filter((account) => !account.isArchived && account.id !== id);
+      if (active.length === 0) return;
+
+      const next: Account = { ...previous, isArchived: true, updatedAt: nowIso() };
+      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      await db.accounts.put(next);
+
+      if (settings.defaultAccountId === id) {
+        await persistDefaultAccount(active[0].id);
+      }
+      if (accountFilter === id) {
+        setAccountFilter("all");
+      }
+    },
+    [accountFilter, accounts, persistDefaultAccount, settings.defaultAccountId],
   );
 
   const upsertBudget = useCallback(
@@ -377,6 +542,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     [budgets, categories, selectedMonth, transactions],
   );
 
+  const accountBalanceRows = useMemo(
+    () => deriveAccountBalances(accounts, transactions),
+    [accounts, transactions],
+  );
+
   const value = useMemo<FinanceContextValue>(
     () => ({
       hydrated,
@@ -384,30 +554,44 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       setView,
       selectedMonth,
       setSelectedMonth,
+      accountFilter,
+      setAccountFilter,
       settings,
       categories,
+      accounts,
       transactions,
       budgets,
       merchantMemory,
       monthSummary,
       categorySpend,
+      accountBalances: accountBalanceRows,
       quickAddRef,
       previewQuickAdd,
       addTransactionFromQuickAdd,
       updateTransaction,
       deleteTransaction,
+      createAccount,
+      updateAccount,
+      archiveAccount,
       upsertBudget,
       deleteBudget,
       undo,
       focusQuickAdd,
       categoryById,
+      accountById,
     }),
     [
+      accountBalanceRows,
+      accountById,
+      accountFilter,
+      accounts,
       addTransactionFromQuickAdd,
+      archiveAccount,
       budgets,
       categories,
       categoryById,
       categorySpend,
+      createAccount,
       deleteBudget,
       deleteTransaction,
       focusQuickAdd,
@@ -419,6 +603,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       settings,
       transactions,
       undo,
+      updateAccount,
       updateTransaction,
       upsertBudget,
       view,

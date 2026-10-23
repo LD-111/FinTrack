@@ -2,15 +2,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { VisualInsights } from "@/components/dashboard/VisualInsights";
 import { useFinance } from "@/context/FinanceContext";
+import { formatAccountLabel } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, formatSignedMoney } from "@/lib/money";
 
 export function DashboardView() {
-  const { monthSummary, categorySpend, transactions, settings, selectedMonth, categoryById, setView } =
-    useFinance();
+  const {
+    monthSummary,
+    categorySpend,
+    transactions,
+    settings,
+    selectedMonth,
+    categoryById,
+    accountById,
+    accountBalances,
+    setView,
+    setAccountFilter,
+  } = useFinance();
   const recent = transactions.slice(0, 8);
   const trackedBudgets = categorySpend.filter((item) => item.budgetCents !== null);
   const monthLabel = formatMonthLabel(selectedMonth, settings.locale);
+  const visibleAccounts = accountBalances.filter((row) => !row.account.isArchived);
+  const totalBalance = visibleAccounts.reduce((sum, row) => sum + row.balanceCents, 0);
 
   return (
     <section className="flex-1 space-y-4 overflow-auto p-5">
@@ -39,7 +52,38 @@ export function DashboardView() {
 
       <VisualInsights />
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>Accounts</CardTitle>
+            <span className="text-sm tabular-nums text-muted-foreground">
+              {formatMoney(totalBalance, settings.currency, settings.locale, "auto")}
+            </span>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {visibleAccounts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Add an account from the sidebar.</p>
+            ) : (
+              visibleAccounts.map((row) => (
+                <button
+                  key={row.account.id}
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 text-sm"
+                  onClick={() => {
+                    setAccountFilter(row.account.id);
+                    setView("transactions");
+                  }}
+                >
+                  <span className="truncate font-medium">{row.account.name}</span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {formatMoney(row.balanceCents, settings.currency, settings.locale, "auto")}
+                  </span>
+                </button>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Budgets</CardTitle>
@@ -84,15 +128,23 @@ export function DashboardView() {
             ) : (
               recent.map((transaction) => {
                 const category = categoryById(transaction.categoryId);
+                const subtitle =
+                  transaction.kind === "transfer"
+                    ? formatAccountLabel(transaction, accountById)
+                    : (category?.name ?? "Uncategorized");
                 return (
                   <div key={transaction.id} className="flex items-center justify-between gap-3 text-sm">
                     <div className="min-w-0">
                       <p className="truncate font-medium">{transaction.description}</p>
-                      <p className="text-xs text-muted-foreground">{category?.name ?? "Uncategorized"}</p>
+                      <p className="text-xs text-muted-foreground">{subtitle}</p>
                     </div>
                     <span
                       className={
-                        transaction.kind === "expense" ? "tabular-nums text-expense" : "tabular-nums text-income"
+                        transaction.kind === "expense"
+                          ? "tabular-nums text-expense"
+                          : transaction.kind === "income"
+                            ? "tabular-nums text-income"
+                            : "tabular-nums text-muted-foreground"
                       }
                     >
                       {formatSignedMoney(

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useFinance } from "@/context/FinanceContext";
+import { formatAccountLabel } from "@/lib/accounts";
 import { currentYearMonth, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney, parseAmountToken } from "@/lib/money";
 import { toMerchantKey } from "@/lib/utils";
@@ -13,26 +14,39 @@ export function TransactionTable() {
   const {
     transactions,
     categories,
+    accounts,
     settings,
     selectedMonth,
     setSelectedMonth,
+    accountFilter,
+    setAccountFilter,
     updateTransaction,
     deleteTransaction,
     categoryById,
+    accountById,
   } = useFinance();
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [editing, setEditing] = useState<{ id: string; field: "description" | "amount" | "date" } | null>(null);
 
+  const usableAccounts = accounts.filter((account) => !account.isArchived);
+
   const rows = useMemo(() => {
     return transactions.filter((transaction) => {
       if (!showAll && !transaction.date.startsWith(selectedMonth)) return false;
       if (categoryFilter !== "all" && transaction.categoryId !== categoryFilter) return false;
+      if (
+        accountFilter !== "all" &&
+        transaction.accountId !== accountFilter &&
+        transaction.toAccountId !== accountFilter
+      ) {
+        return false;
+      }
       if (search && !transaction.description.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [categoryFilter, search, selectedMonth, showAll, transactions]);
+  }, [accountFilter, categoryFilter, search, selectedMonth, showAll, transactions]);
 
   async function saveAmount(transaction: Transaction, raw: string) {
     const cents = parseAmountToken(raw);
@@ -69,6 +83,18 @@ export function TransactionTable() {
           {showAll ? "This month" : "All time"}
         </Button>
         <select
+          value={accountFilter}
+          onChange={(event) => setAccountFilter(event.target.value)}
+          className="h-9 rounded-md border border-input bg-card px-2 text-sm"
+        >
+          <option value="all">All accounts</option>
+          {usableAccounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.name}
+            </option>
+          ))}
+        </select>
+        <select
           value={categoryFilter}
           onChange={(event) => setCategoryFilter(event.target.value)}
           className="h-9 rounded-md border border-input bg-card px-2 text-sm"
@@ -100,6 +126,7 @@ export function TransactionTable() {
               <TableRow>
                 <TableHead className="w-36">Date</TableHead>
                 <TableHead>Description</TableHead>
+                <TableHead className="w-40">Account</TableHead>
                 <TableHead className="w-44">Category</TableHead>
                 <TableHead className="w-36 text-right">Amount</TableHead>
                 <TableHead className="w-12" />
@@ -108,6 +135,7 @@ export function TransactionTable() {
             <TableBody>
               {rows.map((transaction) => {
                 const category = categoryById(transaction.categoryId);
+                const isTransfer = transaction.kind === "transfer";
                 return (
                   <TableRow key={transaction.id}>
                     <TableCell
@@ -158,24 +186,51 @@ export function TransactionTable() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <select
-                        value={transaction.categoryId}
-                        onChange={(event) => {
-                          const kind = (categoryById(event.target.value)?.kind ?? transaction.kind) as CategoryKind;
-                          void updateTransaction(transaction.id, {
-                            categoryId: event.target.value,
-                            kind,
-                          });
-                        }}
-                        className="h-8 w-full rounded-md border-0 bg-transparent text-sm"
-                        style={{ color: category?.color }}
-                      >
-                        {categories.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
+                      {isTransfer ? (
+                        <span className="text-sm text-muted-foreground">
+                          {formatAccountLabel(transaction, accountById)}
+                        </span>
+                      ) : (
+                        <select
+                          value={transaction.accountId}
+                          onChange={(event) => {
+                            void updateTransaction(transaction.id, { accountId: event.target.value });
+                          }}
+                          className="h-8 w-full rounded-md border-0 bg-transparent text-sm"
+                        >
+                          {usableAccounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {isTransfer ? (
+                        <span className="text-sm text-muted-foreground">Transfer</span>
+                      ) : (
+                        <select
+                          value={transaction.categoryId}
+                          onChange={(event) => {
+                            const kind = (categoryById(event.target.value)?.kind ?? transaction.kind) as CategoryKind;
+                            void updateTransaction(transaction.id, {
+                              categoryId: event.target.value,
+                              kind,
+                            });
+                          }}
+                          className="h-8 w-full rounded-md border-0 bg-transparent text-sm"
+                          style={{ color: category?.color }}
+                        >
+                          {categories
+                            .filter((item) => !item.isArchived)
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                        </select>
+                      )}
                     </TableCell>
                     <TableCell
                       onClick={() => setEditing({ id: transaction.id, field: "amount" })}
@@ -196,7 +251,15 @@ export function TransactionTable() {
                           }}
                         />
                       ) : (
-                        <span className={transaction.kind === "expense" ? "text-expense" : "text-income"}>
+                        <span
+                          className={
+                            transaction.kind === "expense"
+                              ? "text-expense"
+                              : transaction.kind === "income"
+                                ? "text-income"
+                                : "text-muted-foreground"
+                          }
+                        >
                           {formatSignedMoney(
                             transaction.amountCents,
                             transaction.kind,

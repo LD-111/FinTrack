@@ -17,7 +17,9 @@ The packaged app is a static Vite `dist/` folder inside Tauri. All data lives in
 
 Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a URL router.
 
-Money is integer cents (`amountCents`). Transaction `date` is local `YYYY-MM-DD`. Timestamps are ISO UTC.
+Money is integer cents (`amountCents`, `openingBalanceCents`). Account balances are derived, never stored. Transaction `date` is local `YYYY-MM-DD`. Timestamps are ISO UTC.
+
+Accounts are first-class (`bank` | `cash` | `savings` | `investment`). Transactions have `accountId`; transfers also have `toAccountId` and `kind: "transfer"`. Transfers do not count as income or spend.
 
 ## Run
 
@@ -31,12 +33,14 @@ Money is integer cents (`amountCents`). Transaction `date` is local `YYYY-MM-DD`
 - TypeScript strict. Functional React components.
 - Path alias `@/` → `src/`
 - Keyboard-first: Quick Add is always visible, focused on launch, commit on Enter. No modal to add a transaction.
-- Parser grammar: `[+]amount [description] [@category] [date-hint]`
+- Parser grammar: `[+]amount [description] [@category] [#account] [date-hint]`
+- Transfers: `amount [#from] -> [#to] [description] [date-hint]` or `transfer 500 from #checking to #savings`
+- `@` is category. `#` is account. Omit `#` to use `settings.defaultAccountId`.
 - Optimistic writes, then Dexie `put`/`delete`. Undo stack cap 20.
 
 ## Out of Phase 1
 
-Bank CSV import, cloud sync, auth, multi-account, recurring transactions, Tauri FS backups, product rename.
+Bank CSV import, cloud sync, auth, recurring transactions, Tauri FS backups, product rename, account detail page, per-account currency.
 
 ## AGENTS.md maintenance (required)
 
