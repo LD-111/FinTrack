@@ -9,7 +9,13 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { isPortfolioAccount, matchAccountToken, uniqueAccountSlug } from "@/lib/accounts";
+import {
+  isPortfolioAccount,
+  matchAccountToken,
+  matchArchivedAccountToken,
+  planAccountDeletion,
+  uniqueAccountSlug,
+} from "@/lib/accounts";
 import { toast } from "@/lib/toast";
 import { resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth, todayISO } from "@/lib/dates";
@@ -59,6 +65,13 @@ type UndoItem =
       transactionIds: string[];
       budgetIds: string[];
       valuationIds: string[];
+    }
+  | {
+      type: "delete-account";
+      account: Account;
+      transactions: Transaction[];
+      logs: ValuationLog[];
+      previousDefaultAccountId: string;
     };
 
 export interface FinanceContextValue {
@@ -92,6 +105,8 @@ export interface FinanceContextValue {
   createAccount: (input: { name: string; type: AccountType; openingBalanceCents?: number }) => Promise<Account | null>;
   updateAccount: (id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) => Promise<void>;
   archiveAccount: (id: string) => Promise<void>;
+  unarchiveAccount: (id: string) => Promise<void>;
+  deleteAccount: (id: string) => Promise<boolean>;
   addValuationLog: (input: { accountId: string; valueCents: number; date?: string }) => Promise<ValuationLog | null>;
   deleteValuationLog: (id: string) => Promise<void>;
   upsertBudget: (categoryId: string, amountCents: number) => Promise<void>;
@@ -196,11 +211,34 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       const fallbackAccount =
         accountById(settings.defaultAccountId) ?? accounts.find((account) => !account.isArchived);
 
+      const archivedNameFor = (token: string | undefined): string | undefined => {
+        if (!token) return undefined;
+        const needle = token.trim().toLowerCase().replace(/^#/, "");
+        if (!needle) return undefined;
+        const activeHit = accounts.some(
+          (account) =>
+            !account.isArchived &&
+            (account.slug === needle ||
+              account.name.toLowerCase() === needle ||
+              account.slug.startsWith(needle) ||
+              account.name.toLowerCase().startsWith(needle)),
+        );
+        if (activeHit) return undefined;
+        return matchArchivedAccountToken(token, accounts)?.name;
+      };
+
       if (parsed.kind === "transfer") {
         const from = parsed.accountToken ? matchAccountToken(parsed.accountToken, accounts) : undefined;
         const to = parsed.toAccountToken ? matchAccountToken(parsed.toAccountToken, accounts) : undefined;
         if (!from || !to) {
-          return { raw, valid: false, reason: "Unknown account" };
+          const archivedName =
+            (!from ? archivedNameFor(parsed.accountToken) : undefined) ??
+            (!to ? archivedNameFor(parsed.toAccountToken) : undefined);
+          return {
+            raw,
+            valid: false,
+            reason: archivedName ? `${archivedName} is archived` : "Unknown account",
+          };
         }
         if (from.id === to.id) {
           return { raw, valid: false, reason: "Pick two different accounts" };
@@ -228,7 +266,12 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         ? matchAccountToken(parsed.accountToken, accounts)
         : fallbackAccount;
       if (parsed.accountToken && !account) {
-        return { raw, valid: false, reason: `No account matches #${parsed.accountToken}` };
+        const archivedName = archivedNameFor(parsed.accountToken);
+        return {
+          raw,
+          valid: false,
+          reason: archivedName ? `${archivedName} is archived` : `No account matches #${parsed.accountToken}`,
+        };
       }
       if (!account) {
         return { raw, valid: false, reason: "Add an account first" };
@@ -466,6 +509,148 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       }
     },
     [accountFilter, accounts, persistDefaultAccount, selectedPortfolioAccountId, settings.defaultAccountId],
+  );
+
+  const unarchiveAccount = useCallback(
+    async (id: string) => {
+      const previous = accounts.find((account) => account.id === id);
+      if (!previous || !previous.isArchived) return;
+
+      const next: Account = { ...previous, isArchived: false, updatedAt: nowIso() };
+      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      await db.accounts.put(next);
+    },
+    [accounts],
+  );
+
+  const restoreDeletedAccount = useCallback(async (item: Extract<UndoItem, { type: "delete-account" }>) => {
+    setAccounts((current) =>
+      current.some((account) => account.id === item.account.id) ? current : [...current, item.account],
+    );
+    setTransactions((current) => {
+      const ids = new Set(current.map((transaction) => transaction.id));
+      const missing = item.transactions.filter((transaction) => !ids.has(transaction.id));
+      if (missing.length === 0) return current;
+      return [...current, ...missing].sort(
+        (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
+      );
+    });
+    setValuationLogs((current) => {
+      const ids = new Set(current.map((log) => log.id));
+      const missing = item.logs.filter((log) => !ids.has(log.id));
+      return missing.length === 0 ? current : [...current, ...missing];
+    });
+    setSettings((current) =>
+      current.defaultAccountId === item.previousDefaultAccountId
+        ? current
+        : { ...current, defaultAccountId: item.previousDefaultAccountId },
+    );
+
+    await db.transaction("rw", db.accounts, db.transactions, db.valuationLogs, db.settings, async () => {
+      await db.accounts.put(item.account);
+      if (item.transactions.length > 0) await db.transactions.bulkPut(item.transactions);
+      if (item.logs.length > 0) await db.valuationLogs.bulkPut(item.logs);
+      const stored = await db.settings.get("default");
+      if (stored && stored.defaultAccountId !== item.previousDefaultAccountId) {
+        await db.settings.put({ ...stored, defaultAccountId: item.previousDefaultAccountId });
+      }
+    });
+  }, []);
+
+  const deleteAccount = useCallback(
+    async (id: string) => {
+      const previous = accounts.find((account) => account.id === id);
+      if (!previous) return false;
+
+      const active = accounts.filter((account) => !account.isArchived && account.id !== id);
+      if (active.length === 0) return false;
+
+      const plan = planAccountDeletion(id, transactions, valuationLogs);
+      const transactionIds = new Set(plan.transactionIds);
+      const valuationIds = new Set(plan.valuationIds);
+      const removedTransactions = transactions.filter((transaction) => transactionIds.has(transaction.id));
+      const removedLogs = valuationLogs.filter((log) => valuationIds.has(log.id));
+      const previousDefaultAccountId = settings.defaultAccountId;
+      const nextDefaultId = previousDefaultAccountId === id ? active[0].id : previousDefaultAccountId;
+      const previousFilter = accountFilter;
+      const previousPortfolioId = selectedPortfolioAccountId;
+
+      setAccounts((current) => current.filter((account) => account.id !== id));
+      setTransactions((current) => current.filter((transaction) => !transactionIds.has(transaction.id)));
+      setValuationLogs((current) => current.filter((log) => !valuationIds.has(log.id)));
+      if (nextDefaultId !== previousDefaultAccountId) {
+        setSettings((current) => ({ ...current, defaultAccountId: nextDefaultId }));
+      }
+      if (accountFilter === id) setAccountFilter("all");
+      if (selectedPortfolioAccountId === id) {
+        const nextPortfolio = active.find((account) => isPortfolioAccount(account));
+        setSelectedPortfolioAccountId(nextPortfolio?.id ?? null);
+      }
+
+      const undoItem: Extract<UndoItem, { type: "delete-account" }> = {
+        type: "delete-account",
+        account: previous,
+        transactions: removedTransactions,
+        logs: removedLogs,
+        previousDefaultAccountId,
+      };
+
+      try {
+        await db.transaction("rw", db.accounts, db.transactions, db.valuationLogs, db.settings, async () => {
+          if (plan.transactionIds.length > 0) await db.transactions.bulkDelete(plan.transactionIds);
+          if (plan.valuationIds.length > 0) await db.valuationLogs.bulkDelete(plan.valuationIds);
+          await db.accounts.delete(id);
+          if (nextDefaultId !== previousDefaultAccountId) {
+            await db.settings.put({ ...settings, defaultAccountId: nextDefaultId });
+          }
+        });
+      } catch {
+        setAccounts((current) =>
+          current.some((account) => account.id === previous.id) ? current : [...current, previous],
+        );
+        setTransactions((current) => {
+          const ids = new Set(current.map((transaction) => transaction.id));
+          const missing = removedTransactions.filter((transaction) => !ids.has(transaction.id));
+          return missing.length === 0 ? current : [...current, ...missing];
+        });
+        setValuationLogs((current) => {
+          const ids = new Set(current.map((log) => log.id));
+          const missing = removedLogs.filter((log) => !ids.has(log.id));
+          return missing.length === 0 ? current : [...current, ...missing];
+        });
+        if (nextDefaultId !== previousDefaultAccountId) {
+          setSettings((current) => ({ ...current, defaultAccountId: previousDefaultAccountId }));
+        }
+        setAccountFilter(previousFilter);
+        setSelectedPortfolioAccountId(previousPortfolioId);
+        toast("Could not remove account", { description: previous.name });
+        return false;
+      }
+
+      pushUndo(undoItem);
+      toast("Account removed", {
+        description: previous.name,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            undoStack.current = undoStack.current.filter((item) => item !== undoItem);
+            void restoreDeletedAccount(undoItem);
+          },
+        },
+        duration: 5000,
+      });
+      return true;
+    },
+    [
+      accountFilter,
+      accounts,
+      pushUndo,
+      restoreDeletedAccount,
+      selectedPortfolioAccountId,
+      settings,
+      transactions,
+      valuationLogs,
+    ],
   );
 
   const addValuationLog = useCallback(
@@ -717,6 +902,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       return true;
     }
 
+    if (item.type === "delete-account") {
+      await restoreDeletedAccount(item);
+      return true;
+    }
+
     const previousBudget = item.previous;
     if (previousBudget) {
       setBudgets((current) => {
@@ -732,7 +922,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       await db.budgets.delete(item.id);
     }
     return true;
-  }, [revertImport]);
+  }, [restoreDeletedAccount, revertImport]);
 
   const focusQuickAdd = useCallback(() => {
     quickAddRef.current?.focus();
@@ -799,6 +989,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       createAccount,
       updateAccount,
       archiveAccount,
+      unarchiveAccount,
+      deleteAccount,
       addValuationLog,
       deleteValuationLog,
       upsertBudget,
@@ -818,6 +1010,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       addTransactionFromQuickAdd,
       addValuationLog,
       archiveAccount,
+      unarchiveAccount,
+      deleteAccount,
       budgets,
       categories,
       categoryById,

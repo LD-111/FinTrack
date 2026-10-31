@@ -1,4 +1,4 @@
-import type { Account, AccountType, Transaction } from "@/lib/types";
+import type { Account, AccountType, Transaction, ValuationLog } from "@/lib/types";
 import { toMerchantKey } from "@/lib/utils";
 
 export const PORTFOLIO_ACCOUNT_TYPES: AccountType[] = ["investment", "crypto", "stock"];
@@ -36,20 +36,134 @@ export function uniqueAccountSlug(name: string, existing: Account[]): string {
   return `${base} ${suffix}`;
 }
 
-export function matchAccountToken(token: string, accounts: Account[]): Account | undefined {
+function matchTokenIn(token: string, accounts: Account[]): Account | undefined {
   const needle = token.trim().toLowerCase().replace(/^#/, "");
   if (!needle) return undefined;
 
-  const active = accounts.filter((account) => !account.isArchived);
-  const exact = active.find(
+  const exact = accounts.find(
     (account) => account.slug === needle || account.name.toLowerCase() === needle,
   );
   if (exact) return exact;
 
-  const prefixes = active.filter(
+  const prefixes = accounts.filter(
     (account) => account.slug.startsWith(needle) || account.name.toLowerCase().startsWith(needle),
   );
   return prefixes.length === 1 ? prefixes[0] : undefined;
+}
+
+export function matchAccountToken(token: string, accounts: Account[]): Account | undefined {
+  return matchTokenIn(
+    token,
+    accounts.filter((account) => !account.isArchived),
+  );
+}
+
+export function matchArchivedAccountToken(token: string, accounts: Account[]): Account | undefined {
+  return matchTokenIn(
+    token,
+    accounts.filter((account) => account.isArchived),
+  );
+}
+
+export type AccountNameRank = "exact" | "prefix" | "contains";
+
+export interface AccountNameHit {
+  account: Account;
+  rank: AccountNameRank;
+}
+
+const NAME_RANK_ORDER: Record<AccountNameRank, number> = {
+  exact: 0,
+  prefix: 1,
+  contains: 2,
+};
+
+export function matchAccountsByName(query: string, accounts: Account[]): AccountNameHit[] {
+  const nameNeedle = query.trim().toLowerCase();
+  const slugNeedle = toAccountSlug(query);
+  if (!nameNeedle && !slugNeedle) return [];
+
+  const hits: AccountNameHit[] = [];
+  for (const account of accounts) {
+    const name = account.name.toLowerCase();
+    const slug = account.slug;
+    const exact =
+      (nameNeedle !== "" && name === nameNeedle) || (slugNeedle !== "" && slug === slugNeedle);
+    const prefix =
+      (nameNeedle !== "" && name.startsWith(nameNeedle)) ||
+      (slugNeedle !== "" && slug.startsWith(slugNeedle));
+    const contains =
+      (nameNeedle !== "" && name.includes(nameNeedle)) ||
+      (slugNeedle !== "" && slug.includes(slugNeedle));
+    let rank: AccountNameRank | null = null;
+    if (exact) rank = "exact";
+    else if (prefix) rank = "prefix";
+    else if (contains) rank = "contains";
+    if (rank) hits.push({ account, rank });
+  }
+
+  hits.sort((a, b) => {
+    const byRank = NAME_RANK_ORDER[a.rank] - NAME_RANK_ORDER[b.rank];
+    if (byRank !== 0) return byRank;
+    return a.account.name.localeCompare(b.account.name);
+  });
+  return hits;
+}
+
+export interface AccountBalanceDelta {
+  accountId: string;
+  deltaCents: number;
+}
+
+export interface AccountDeletionPlan {
+  transactionIds: string[];
+  valuationIds: string[];
+  incomeExpenseCount: number;
+  transferCount: number;
+  balanceDeltas: AccountBalanceDelta[];
+}
+
+export function planAccountDeletion(
+  accountId: string,
+  transactions: Transaction[],
+  valuationLogs: ValuationLog[],
+): AccountDeletionPlan {
+  const transactionIds: string[] = [];
+  let incomeExpenseCount = 0;
+  let transferCount = 0;
+  const deltas = new Map<string, number>();
+
+  for (const transaction of transactions) {
+    const onSource = transaction.accountId === accountId;
+    const onDest = transaction.toAccountId === accountId;
+    if (!onSource && !onDest) continue;
+
+    transactionIds.push(transaction.id);
+    if (transaction.kind !== "transfer") {
+      incomeExpenseCount += 1;
+      continue;
+    }
+
+    transferCount += 1;
+    if (onSource && transaction.toAccountId && transaction.toAccountId !== accountId) {
+      const id = transaction.toAccountId;
+      deltas.set(id, (deltas.get(id) ?? 0) - transaction.amountCents);
+    }
+    if (onDest && transaction.accountId !== accountId) {
+      const id = transaction.accountId;
+      deltas.set(id, (deltas.get(id) ?? 0) + transaction.amountCents);
+    }
+  }
+
+  return {
+    transactionIds,
+    valuationIds: valuationLogs.filter((log) => log.accountId === accountId).map((log) => log.id),
+    incomeExpenseCount,
+    transferCount,
+    balanceDeltas: [...deltas.entries()]
+      .filter(([, deltaCents]) => deltaCents !== 0)
+      .map(([id, deltaCents]) => ({ accountId: id, deltaCents })),
+  };
 }
 
 export function formatAccountLabel(

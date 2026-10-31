@@ -2,12 +2,13 @@ import { useRef, useState } from "react";
 import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ManageAccountsDialog } from "@/components/layout/ManageAccountsDialog";
 import { useFinance } from "@/context/FinanceContext";
-import { isPortfolioAccount } from "@/lib/accounts";
+import { isPortfolioAccount, matchAccountsByName } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, parseAmountToken } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { AccountType, AppView } from "@/lib/types";
+import type { Account, AccountType, AppView } from "@/lib/types";
 
 const NAV: { view: AppView; label: string; shortcut: string; icon: typeof LayoutDashboard }[] = [
   { view: "dashboard", label: "Dashboard", shortcut: "1", icon: LayoutDashboard },
@@ -38,30 +39,65 @@ export function Sidebar() {
     setDashboardTab,
     selectedPortfolioAccountId,
     setSelectedPortfolioAccountId,
+    accounts,
     createAccount,
+    unarchiveAccount,
     exportWorkbook,
     importWorkbook,
   } = useFinance();
   const netPositive = monthSummary.netCents >= 0;
   const importRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
+  const [managing, setManaging] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("bank");
   const [opening, setOpening] = useState("");
 
   const visibleBalances = accountBalances.filter((row) => !row.account.isArchived);
 
-  async function submitAccount() {
+  const nameHits = matchAccountsByName(name, accounts);
+  const suggestions = nameHits.slice(0, 4);
+  const exactActive = nameHits.filter((hit) => hit.rank === "exact" && !hit.account.isArchived);
+  const exactArchived = nameHits.filter((hit) => hit.rank === "exact" && hit.account.isArchived);
+  const restoreTarget = exactActive.length === 0 && exactArchived.length === 1 ? exactArchived[0].account : null;
+  const blockedByActive = exactActive.length > 0;
+
+  function resetCreateForm() {
+    setName("");
+    setType("bank");
+    setOpening("");
+    setCreating(false);
+  }
+
+  function openAccount(account: Account) {
+    if (isPortfolioAccount(account)) {
+      setSelectedPortfolioAccountId(account.id);
+      setDashboardTab("portfolio");
+      setView("dashboard");
+      return;
+    }
+    setAccountFilter(account.id);
+    setView("transactions");
+  }
+
+  async function restoreAccount(id: string) {
+    await unarchiveAccount(id);
+    resetCreateForm();
+  }
+
+  async function submitAccount(force: boolean) {
+    if (!force && restoreTarget) {
+      await restoreAccount(restoreTarget.id);
+      return;
+    }
+    if (!force && blockedByActive) return;
     const created = await createAccount({
       name,
       type,
       openingBalanceCents: parseAmountToken(opening) ?? 0,
     });
     if (!created) return;
-    setName("");
-    setType("bank");
-    setOpening("");
-    setCreating(false);
+    resetCreateForm();
   }
 
   return (
@@ -112,7 +148,7 @@ export function Sidebar() {
             className="mb-2 space-y-2 rounded-md bg-sidebar-accent/50 p-2"
             onSubmit={(event) => {
               event.preventDefault();
-              void submitAccount();
+              void submitAccount(!blockedByActive && exactArchived.length > 0 && !restoreTarget);
             }}
           >
             <Input
@@ -122,6 +158,41 @@ export function Sidebar() {
               className="h-8 bg-background/10 text-sidebar-foreground placeholder:text-sidebar-foreground/40"
               onChange={(event) => setName(event.target.value)}
             />
+            {suggestions.length > 0 && (
+              <ul className="space-y-0.5">
+                {suggestions.map(({ account }) => (
+                  <li key={account.id} className="flex items-center gap-1 rounded px-1 py-0.5">
+                    {account.isArchived ? (
+                      <>
+                        <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
+                        <span className="shrink-0 text-[10px] text-sidebar-foreground/50">Archived</span>
+                        <Button
+                          type="button"
+                          variant="sidebar"
+                          size="sm"
+                          className="h-6 px-1.5 text-[10px]"
+                          onClick={() => void restoreAccount(account.id)}
+                        >
+                          Restore
+                        </Button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-1 text-left text-xs hover:underline"
+                        onClick={() => {
+                          openAccount(account);
+                          resetCreateForm();
+                        }}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{account.name}</span>
+                        <span className="shrink-0 text-[10px] text-sidebar-foreground/50">In use</span>
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
             <select
               value={type}
               className="h-8 w-full rounded-md border border-input bg-background/10 px-2 text-xs"
@@ -139,9 +210,26 @@ export function Sidebar() {
               className="h-8 bg-background/10 text-sidebar-foreground placeholder:text-sidebar-foreground/40"
               onChange={(event) => setOpening(event.target.value)}
             />
-            <Button type="submit" size="sm" className="w-full">
-              Add
-            </Button>
+            {restoreTarget ? (
+              <div className="space-y-1">
+                <Button type="submit" size="sm" className="w-full">
+                  Restore
+                </Button>
+                <Button
+                  type="button"
+                  variant="sidebar"
+                  size="sm"
+                  className="w-full text-[11px]"
+                  onClick={() => void submitAccount(true)}
+                >
+                  Create a new one anyway
+                </Button>
+              </div>
+            ) : (
+              <Button type="submit" size="sm" className="w-full" disabled={blockedByActive || !name.trim()}>
+                {exactArchived.length > 0 ? "Create a new one anyway" : "Add"}
+              </Button>
+            )}
           </form>
         )}
 
@@ -160,16 +248,7 @@ export function Sidebar() {
                   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent",
                   active && "bg-sidebar-accent text-sidebar-accent-foreground",
                 )}
-                onClick={() => {
-                  if (portfolio) {
-                    setSelectedPortfolioAccountId(row.account.id);
-                    setDashboardTab("portfolio");
-                    setView("dashboard");
-                    return;
-                  }
-                  setAccountFilter(row.account.id);
-                  setView("transactions");
-                }}
+                onClick={() => openAccount(row.account)}
               >
                 <span className="min-w-0 flex-1 truncate">{row.account.name}</span>
                 <span className="tabular-nums text-sidebar-foreground/70">
@@ -179,7 +258,17 @@ export function Sidebar() {
             );
           })}
         </div>
+        <Button
+          type="button"
+          variant="sidebar"
+          size="sm"
+          className="mt-2 w-full justify-start px-2 text-[11px] text-sidebar-foreground/55"
+          onClick={() => setManaging(true)}
+        >
+          Manage accounts
+        </Button>
       </div>
+      <ManageAccountsDialog open={managing} onClose={() => setManaging(false)} />
 
       <div className="flex gap-2 border-t border-sidebar-border px-3 py-3">
         <Button

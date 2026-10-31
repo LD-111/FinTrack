@@ -36,7 +36,7 @@ export default function App() {
         return;
       }
 
-      if (!inField) {
+      if (!inField && !document.querySelector("[data-account-manager]")) {
         if (event.key === "1") setView("dashboard");
         if (event.key === "2") setView("transactions");
         if (event.key === "3") setView("budgets");

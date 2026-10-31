@@ -1,7 +1,7 @@
 # lib
 
 - `types.ts` — `Account`, `Transaction`, `Category`, `Budget`, `MerchantMemory`, `AppSettings`, `ValuationLog`, `PortfolioSnapshot`. Amounts are cents. `AccountType` includes `investment` | `crypto` | `stock`. `Transaction.kind` is `expense` | `income` | `transfer`.
-- `accounts.ts` — slug + `#token` matching (exact, then unique prefix), transfer labels, `isPortfolioAccount`.
+- `accounts.ts` — slug + `#token` matching (exact, then unique prefix; active accounts only), `matchArchivedAccountToken` for the same match on archived accounts, `matchAccountsByName` (exact, prefix, then substring), `planAccountDeletion` (rows to remove and other accounts' balance deltas when transfers are deleted), transfer labels, `isPortfolioAccount`.
 - `db.ts` — Dexie v3 stores: accounts, categories, transactions, budgets, merchantMemory, settings, valuationLogs. Bump the version when the schema changes. v2 upgrade seeds Cash, backfills `accountId`, adds `cat_transfer`. v3 adds `valuationLogs`. Never create these stores with raw `indexedDB.open` — Dexie must own the schema or hydrate throws `BulkError` and the UI stays on Loading….
 - `seed.ts` — first-launch categories + Cash account + USD/en-US settings. Stable ids such as `cat_food`, `cat_uncategorized`, `cat_transfer`, `acct_cash`. `seedIfEmpty()` no-ops once any category exists; leftover IndexedDB is not reset on later visits.
 - `parser.ts` — `[+]amount [description] [@category] [#account] [date-hint]`. Transfers: `amount #from -> #to` or `transfer 500 from #a to #b`. Accepts `12.50` and `12,50`.

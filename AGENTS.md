@@ -20,7 +20,7 @@ Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a
 
 Money is integer cents (`amountCents`, `openingBalanceCents`, `valueCents`). Account balances and portfolio metrics are derived, never stored. Transaction `date` and valuation `date` are local `YYYY-MM-DD`. Timestamps are ISO UTC.
 
-Accounts are first-class (`bank` | `cash` | `savings` | `investment` | `crypto` | `stock`). `investment`, `crypto`, and `stock` are portfolio accounts. Transactions have `accountId`; transfers also have `toAccountId` and `kind: "transfer"`. Transfers do not count as income or spend.
+Accounts are first-class (`bank` | `cash` | `savings` | `investment` | `crypto` | `stock`). `investment`, `crypto`, and `stock` are portfolio accounts. Transactions have `accountId`; transfers also have `toAccountId` and `kind: "transfer"`. Transfers do not count as income or spend. Manage accounts (under the sidebar list) archives an account, which hides it and keeps its history, or deletes it after a confirmation that lists removed transactions, transfers, and balance changes on the accounts that remain. At least one account stays active. The create-account name field suggests similar accounts so an archived one can be restored instead of copied.
 
 Portfolio current value = latest valuation log + transfers after that log. Principal = opening + net transfers in − out. Profit = value − principal. Return % is time-weighted so new capital does not look like gain or loss. Sidebar shows market value for portfolio accounts.
 
