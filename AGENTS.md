@@ -29,7 +29,7 @@ Portfolio current value = latest valuation log + transfers after that log. Princ
 - UI only: `npm run dev` (Vite on http://localhost:1420)
 - Desktop: `npm run tauri dev`
 - Production frontend: `npm run build` → `dist/`
-- Installer: `npm run tauri build`
+- Installer: `npm run tauri build` (binary `FinTrack.exe`)
 
 ## Conventions
 
@@ -44,7 +44,7 @@ Portfolio current value = latest valuation log + transfers after that log. Princ
 
 ## Out of Phase 1
 
-Bank CSV import, cloud sync, auth, recurring transactions, Tauri FS backups, product rename, account detail page, per-account currency.
+Bank CSV import, cloud sync, auth, recurring transactions, Tauri FS backups, account detail page, per-account currency.
 
 ## AGENTS.md maintenance (required)
 
