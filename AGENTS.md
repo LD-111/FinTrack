@@ -26,10 +26,26 @@ Portfolio current value = latest valuation log + transfers after that log. Princ
 
 ## Run
 
-- UI only: `npm run dev` (Vite on http://localhost:1420)
+- UI only: `npm run dev` (Vite on http://localhost:1420, `strictPort: true`)
 - Desktop: `npm run tauri dev`
 - Production frontend: `npm run build` → `dist/`
 - Installer: `npm run tauri build` (binary `FinTrack.exe`)
+
+## Testing
+
+There is no automated suite. Exercise the UI at http://localhost:1420. Vite will not start if 1420 is already taken — reuse that server instead of launching a second one.
+
+IndexedDB database name is `fintrack`. It persists per browser profile (Vite tab, another Chrome profile, and the Tauri WebView are different databases). Leftover verification rows are normal: empty income, a negative Cash balance, or a "Verification Lunch" in Recent. `seedIfEmpty()` only runs when `categories` is empty, so a second visit never resets data. To start clean, delete the `fintrack` database and reload so Dexie and seed run again.
+
+Do not create the Dexie schema yourself. Opening `indexedDB.open("fintrack", 3)` and adding stores by hand, then letting the app boot, throws `BulkError` during hydrate and leaves the logo + "Loading…" screen forever. Let the app open Dexie first.
+
+To load fixture data: wait until the sidebar is visible, write into the existing stores, then reload so `FinanceContext` rehydrates. Leave `categories` alone unless you are replacing known seed ids (`cat_food`, `cat_salary`, `cat_transfer`, `cat_uncategorized`, …). Clear leftover `accounts` / `transactions` / `budgets` / `valuationLogs` if you need a clean month. Dashboard and Ledger filter by `selectedMonth` (the current `YYYY-MM`); fixture `date` values outside that month do not appear in totals or the default list. Transfers need `kind: "transfer"`, `toAccountId`, and `categoryId: "cat_transfer"`.
+
+There are no URL routes. You cannot open `/ledger`. Click the sidebar, or press `1` / `2` / `3` only after Quick Add is not focused — it is focused on launch, so Escape (or click away) first. `/` and Ctrl+K put focus back on the bar. Setting an input's DOM `value` does not update React state: Quick Add will show the text but no preview chips unless keystrokes go through `onChange` (or you call context).
+
+`body` is `overflow: hidden`. The main pane scrolls, not the document, so a full-page screenshot misses Accounts / Budgets / Recent and the lower charts. Scroll that pane or use a tall viewport. Cashflow charts sit three-across only at `xl`. After switching to Cashflow or Portfolio, wait for `.recharts-surface` before asserting or capturing.
+
+A throw during `seedIfEmpty()` or the initial Dexie reads leaves `hydrated` false (infinite Loading…). Edits to `FinanceContext` cannot Fast Refresh (`useFinance` export) and trigger a full reload — in-memory UI state does not survive.
 
 ## Conventions
 
