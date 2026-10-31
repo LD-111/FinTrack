@@ -37,15 +37,17 @@ There is no automated suite. Exercise the UI at http://localhost:1420. Vite will
 
 IndexedDB database name is `fintrack`. It persists per browser profile (Vite tab, another Chrome profile, and the Tauri WebView are different databases). Leftover verification rows are normal: empty income, a negative Cash balance, or a "Verification Lunch" in Recent. `seedIfEmpty()` only runs when `categories` is empty, so a second visit never resets data. To start clean, delete the `fintrack` database and reload so Dexie and seed run again.
 
-Do not create the Dexie schema yourself. Opening `indexedDB.open("fintrack", 3)` and adding stores by hand, then letting the app boot, throws `BulkError` during hydrate and leaves the logo + "Loading…" screen forever. Let the app open Dexie first.
+Do not create the Dexie schema yourself. Opening `indexedDB.open("fintrack", 3)` and adding stores by hand, then letting the app boot, throws `BulkError` during hydrate and leaves the splash up forever. Let the app open Dexie first.
 
-To load fixture data: wait until the sidebar is visible, write into the existing stores, then reload so `FinanceContext` rehydrates. Leave `categories` alone unless you are replacing known seed ids (`cat_food`, `cat_salary`, `cat_transfer`, `cat_uncategorized`, …). Clear leftover `accounts` / `transactions` / `budgets` / `valuationLogs` if you need a clean month. Dashboard and Ledger filter by `selectedMonth` (the current `YYYY-MM`); fixture `date` values outside that month do not appear in totals or the default list. Transfers need `kind: "transfer"`, `toAccountId`, and `categoryId: "cat_transfer"`.
+Launch shows a splash (logo and “FinTrack” on the sidebar color) until hydrate and a short minimum (~1s), then fades into the shell. Quick Add is focused underneath, so it is ready when the dashboard appears. `prefers-reduced-motion` skips the animation and dismisses as soon as hydrate finishes.
+
+To load fixture data: wait until the splash has faded and the sidebar is visible, write into the existing stores, then reload so `FinanceContext` rehydrates. Leave `categories` alone unless you are replacing known seed ids (`cat_food`, `cat_salary`, `cat_transfer`, `cat_uncategorized`, …). Clear leftover `accounts` / `transactions` / `budgets` / `valuationLogs` if you need a clean month. Dashboard and Ledger filter by `selectedMonth` (the current `YYYY-MM`); fixture `date` values outside that month do not appear in totals or the default list. Transfers need `kind: "transfer"`, `toAccountId`, and `categoryId: "cat_transfer"`.
 
 There are no URL routes. You cannot open `/ledger`. Click the sidebar, or press `1` / `2` / `3` only after Quick Add is not focused — it is focused on launch, so Escape (or click away) first. `/` and Ctrl+K put focus back on the bar. Setting an input's DOM `value` does not update React state: Quick Add will show the text but no preview chips unless keystrokes go through `onChange` (or you call context).
 
 `body` is `overflow: hidden`. The main pane scrolls, not the document, so a full-page screenshot misses Accounts / Budgets / Recent and the lower charts. Scroll that pane or use a tall viewport. Cashflow charts sit three-across only at `xl`. After switching to Cashflow or Portfolio, wait for `.recharts-surface` before asserting or capturing.
 
-A throw during `seedIfEmpty()` or the initial Dexie reads leaves `hydrated` false (infinite Loading…). Edits to `FinanceContext` cannot Fast Refresh (`useFinance` export) and trigger a full reload — in-memory UI state does not survive.
+A throw during `seedIfEmpty()` or the initial Dexie reads leaves `hydrated` false, so the splash stays up. Edits to `FinanceContext` cannot Fast Refresh (`useFinance` export) and trigger a full reload — in-memory UI state does not survive.
 
 ## Conventions
 

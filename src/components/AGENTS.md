@@ -1,5 +1,6 @@
 # components
 
+- `layout/SplashScreen.tsx` — launch overlay: logo and wordmark on the sidebar color. App keeps it up until hydrate and a short minimum, then fades it out. No finance logic.
 - `layout/Sidebar.tsx` — view switch, account list + inline create (includes Crypto/Stock), month net, keys 1/2/3. Portfolio accounts open Dashboard → Portfolio; other accounts open Ledger. Export and Import sit above the month net. **Manage accounts** sits under the list and is the only archive, restore, and delete entry. Delete asks for confirmation and lists transactions, transfers, valuation logs, and balance changes on other accounts. The create-account name field lists up to four similar accounts: Restore puts an archived one back and closes the form; choosing an active one opens it. An exact archived name makes Restore the primary button, with “Create a new one anyway” secondary. An exact active name disables Add.
 - `transactions/QuickAddBar.tsx` — always visible formula bar; never hide behind a modal
 - `transactions/TransactionTable.tsx` — dense ledger, account + category filters, inline edit, delete + undo

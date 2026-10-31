@@ -2,7 +2,7 @@
 
 `FinanceContext` is the only persistence gateway. Components call context methods; they do not import Dexie.
 
-- Hydrate once on boot after `seedIfEmpty()`. A throw here leaves `hydrated` false (logo + Loading…). Fast Refresh cannot update this file (`useFinance` export) — Vite reloads the page.
+- Hydrate once on boot after `seedIfEmpty()`. A throw here leaves `hydrated` false (the splash stays up). Fast Refresh cannot update this file (`useFinance` export) — Vite reloads the page.
 - Fixture writes to IndexedDB are invisible until reload; context does not live-subscribe to Dexie. Dashboard/Ledger only show the current `selectedMonth`.
 - Optimistic React state, then `db.*.put/delete`.
 - `addTransactionFromQuickAdd` parses + categorizes + resolves `#account` + writes + merchant memory. Transfers skip merchant memory. Return `{ ok, reason }` — do not throw parse errors.
