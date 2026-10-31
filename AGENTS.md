@@ -9,6 +9,7 @@ Local-first desktop personal finance app. Absolute simplicity: faster and easier
 - Tailwind CSS v4 + shadcn-style primitives in `src/components/ui`
 - Dexie (IndexedDB) for persistence
 - Recharts for insights
+- SheetJS (`xlsx`) for the ledger workbook
 - npm
 
 ## Architecture
@@ -39,6 +40,7 @@ Portfolio current value = latest valuation log + transfers after that log. Princ
 - Transfers: `amount [#from] -> [#to] [description] [date-hint]` or `transfer 500 from #checking to #savings`
 - `@` is category. `#` is account. Omit `#` to use `settings.defaultAccountId`.
 - Optimistic writes, then Dexie `put`/`delete`. Undo stack cap 20.
+- Workbook: sidebar Export and Import. File `fintrack-YYYY-MM-DD.xlsx` with sheets Accounts, Categories, Transactions, Budgets, Valuations. Import inserts rows and creates missing accounts or categories. Existing ids are left unchanged. One Ctrl+Z undoes that import.
 
 ## Out of Phase 1
 

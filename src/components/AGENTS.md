@@ -1,6 +1,6 @@
 # components
 
-- `layout/Sidebar.tsx` — view switch, account list + inline create (includes Crypto/Stock), month net, keys 1/2/3. Portfolio accounts open Dashboard → Portfolio; other accounts open Ledger.
+- `layout/Sidebar.tsx` — view switch, account list + inline create (includes Crypto/Stock), month net, keys 1/2/3. Portfolio accounts open Dashboard → Portfolio; other accounts open Ledger. Export and Import sit above the month net.
 - `transactions/QuickAddBar.tsx` — always visible formula bar; never hide behind a modal
 - `transactions/TransactionTable.tsx` — dense ledger, account + category filters, inline edit, delete + undo
 - `dashboard/DashboardView.tsx` + `VisualInsights.tsx` — Cashflow | Portfolio toggle. Cashflow: month stats, account balances, Recharts. Portfolio: `PortfolioPanel.tsx` (account chips, P/L, invested-vs-value chart, log value, history).

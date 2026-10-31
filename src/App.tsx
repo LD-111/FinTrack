@@ -49,7 +49,8 @@ export default function App() {
 
   if (!hydrated) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <img src="/fintrack_logo.png" alt="" className="size-16" />
         Loading…
       </div>
     );

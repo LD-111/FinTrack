@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,8 +39,11 @@ export function Sidebar() {
     selectedPortfolioAccountId,
     setSelectedPortfolioAccountId,
     createAccount,
+    exportWorkbook,
+    importWorkbook,
   } = useFinance();
   const netPositive = monthSummary.netCents >= 0;
+  const importRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("bank");
@@ -63,9 +66,12 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="px-4 py-5">
-        <p className="text-lg font-semibold tracking-tight">FinTrack</p>
-        <p className="text-xs text-sidebar-foreground/60">Local ledger</p>
+      <div className="flex items-center gap-2.5 px-4 py-5">
+        <img src="/fintrack_logo.png" alt="" className="size-9 shrink-0" />
+        <div>
+          <p className="text-lg font-semibold tracking-tight">FinTrack</p>
+          <p className="text-xs text-sidebar-foreground/60">Local ledger</p>
+        </div>
       </div>
 
       <nav className="flex flex-col gap-1 px-2">
@@ -173,6 +179,39 @@ export function Sidebar() {
             );
           })}
         </div>
+      </div>
+
+      <div className="flex gap-2 border-t border-sidebar-border px-3 py-3">
+        <Button
+          type="button"
+          variant="sidebar"
+          size="sm"
+          className="flex-1 border border-sidebar-border text-xs"
+          onClick={() => exportWorkbook()}
+        >
+          Export
+        </Button>
+        <Button
+          type="button"
+          variant="sidebar"
+          size="sm"
+          className="flex-1 border border-sidebar-border text-xs"
+          onClick={() => importRef.current?.click()}
+        >
+          Import
+        </Button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file) return;
+            void file.arrayBuffer().then((buffer) => importWorkbook(buffer));
+          }}
+        />
       </div>
 
       <div className="border-t border-sidebar-border px-4 py-4">

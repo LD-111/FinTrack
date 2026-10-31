@@ -10,5 +10,6 @@
 - `accountFilter` is shared so the sidebar can open Ledger on one account.
 - `dashboardTab` (`cashflow` | `portfolio`) and `selectedPortfolioAccountId` stay in context so the sidebar can open the Portfolio tab on a portfolio account.
 - Valuation logs: `addValuationLog`, `deleteValuationLog`. Optimistic write, then Dexie. UI never imports `db`.
-- Undo stack (cap 20) covers add/update/delete transaction, budget upserts, and valuation add/delete.
+- Undo stack (cap 20) covers add/update/delete transaction, budget upserts, valuation add/delete, and one entry per workbook import.
+- `exportWorkbook` downloads the ledger workbook. `importWorkbook` inserts the planned rows in one Dexie transaction. The import undo removes only the accounts, categories, transactions, budgets, and valuations that import created.
 - Derived month totals come from `src/lib/derived.ts`. Portfolio snapshots come from `src/lib/portfolio.ts`. Context overlays market value onto displayed `accountBalances` for portfolio accounts.

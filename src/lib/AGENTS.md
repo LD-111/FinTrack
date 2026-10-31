@@ -9,4 +9,5 @@
 - `derived.ts` — month totals skip transfers. `accountBalances` = opening ± income/expense/transfers (book value).
 - `portfolio.ts` — principal (opening + net transfers), current value (last log + later transfers), TWR, chart series. Do not store these on `Account`.
 - `money.ts` / `dates.ts` — display and parse helpers. Dates stay local calendar dates. `formatSignedMoney` treats transfer as unsigned.
+- `excel.ts` — SheetJS workbook. Export downloads `fintrack-YYYY-MM-DD.xlsx` (Accounts, Categories, Transactions, Budgets, Valuations). Amounts are decimal currency; dates are `YYYY-MM-DD`. Import plans inserts only: skip existing ids, match an account or category by id then name (accounts also by slug), and create an unknown name (account type `bank`, category kind from the transaction, budgets are expense). Empty account uses the default account. Empty category uses Uncategorized, or Transfer for a transfer. A category that already has a budget is left unchanged.
 - `toast.ts` — lightweight toast bus used by FinanceContext undo/delete.

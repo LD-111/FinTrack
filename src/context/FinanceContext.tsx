@@ -24,6 +24,7 @@ import {
 } from "@/lib/derived";
 import { parseQuickAdd } from "@/lib/parser";
 import { overlayPortfolioValues, portfolioSnapshots as derivePortfolioSnapshots } from "@/lib/portfolio";
+import { downloadWorkbook, planWorkbookImport, summarizeImport, type ImportPlan } from "@/lib/excel";
 import { formatMoney } from "@/lib/money";
 import { DEFAULT_SETTINGS, seedIfEmpty } from "@/lib/seed";
 import type {
@@ -50,7 +51,15 @@ type UndoItem =
   | { type: "update-tx"; previous: Transaction }
   | { type: "upsert-budget"; previous: Budget | null; id: string }
   | { type: "add-valuation"; id: string }
-  | { type: "delete-valuation"; log: ValuationLog };
+  | { type: "delete-valuation"; log: ValuationLog }
+  | {
+      type: "import";
+      accountIds: string[];
+      categoryIds: string[];
+      transactionIds: string[];
+      budgetIds: string[];
+      valuationIds: string[];
+    };
 
 export interface FinanceContextValue {
   hydrated: boolean;
@@ -88,6 +97,8 @@ export interface FinanceContextValue {
   upsertBudget: (categoryId: string, amountCents: number) => Promise<void>;
   deleteBudget: (id: string) => Promise<void>;
   undo: () => Promise<boolean>;
+  exportWorkbook: () => void;
+  importWorkbook: (data: ArrayBuffer) => Promise<void>;
   focusQuickAdd: () => void;
   categoryById: (id: string) => Category | undefined;
   accountById: (id: string) => Account | undefined;
@@ -563,6 +574,99 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     [budgets, pushUndo],
   );
 
+  const revertImport = useCallback(async (item: Extract<UndoItem, { type: "import" }>) => {
+    const accountIds = new Set(item.accountIds);
+    const categoryIds = new Set(item.categoryIds);
+    const transactionIds = new Set(item.transactionIds);
+    const budgetIds = new Set(item.budgetIds);
+    const valuationIds = new Set(item.valuationIds);
+    setAccounts((current) => current.filter((account) => !accountIds.has(account.id)));
+    setCategories((current) => current.filter((category) => !categoryIds.has(category.id)));
+    setTransactions((current) => current.filter((transaction) => !transactionIds.has(transaction.id)));
+    setBudgets((current) => current.filter((budget) => !budgetIds.has(budget.id)));
+    setValuationLogs((current) => current.filter((log) => !valuationIds.has(log.id)));
+    await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
+      if (item.transactionIds.length > 0) await db.transactions.bulkDelete(item.transactionIds);
+      if (item.budgetIds.length > 0) await db.budgets.bulkDelete(item.budgetIds);
+      if (item.valuationIds.length > 0) await db.valuationLogs.bulkDelete(item.valuationIds);
+      if (item.accountIds.length > 0) await db.accounts.bulkDelete(item.accountIds);
+      if (item.categoryIds.length > 0) await db.categories.bulkDelete(item.categoryIds);
+    });
+  }, []);
+
+  const exportWorkbook = useCallback(() => {
+    downloadWorkbook({ accounts, categories, transactions, budgets, valuationLogs });
+  }, [accounts, budgets, categories, transactions, valuationLogs]);
+
+  const importWorkbook = useCallback(
+    async (data: ArrayBuffer) => {
+      const plan: ImportPlan = planWorkbookImport(
+        data,
+        { accounts, categories, transactions, budgets, valuationLogs },
+        settings.defaultAccountId,
+      );
+      const inserted =
+        plan.accounts.length +
+        plan.categories.length +
+        plan.transactions.length +
+        plan.budgets.length +
+        plan.valuationLogs.length;
+      const summary = summarizeImport(plan);
+
+      if (inserted === 0) {
+        toast(summary.title, { description: summary.description, duration: 6000 });
+        return;
+      }
+
+      setCategories((current) => [...current, ...plan.categories]);
+      setAccounts((current) => [...current, ...plan.accounts]);
+      setTransactions((current) =>
+        [...current, ...plan.transactions].sort(
+          (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
+        ),
+      );
+      setBudgets((current) => [...current, ...plan.budgets]);
+      setValuationLogs((current) => [...current, ...plan.valuationLogs]);
+
+      const undoItem: Extract<UndoItem, { type: "import" }> = {
+        type: "import",
+        accountIds: plan.accounts.map((account) => account.id),
+        categoryIds: plan.categories.map((category) => category.id),
+        transactionIds: plan.transactions.map((transaction) => transaction.id),
+        budgetIds: plan.budgets.map((budget) => budget.id),
+        valuationIds: plan.valuationLogs.map((log) => log.id),
+      };
+
+      try {
+        await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
+          if (plan.categories.length > 0) await db.categories.bulkAdd(plan.categories);
+          if (plan.accounts.length > 0) await db.accounts.bulkAdd(plan.accounts);
+          if (plan.transactions.length > 0) await db.transactions.bulkAdd(plan.transactions);
+          if (plan.budgets.length > 0) await db.budgets.bulkAdd(plan.budgets);
+          if (plan.valuationLogs.length > 0) await db.valuationLogs.bulkAdd(plan.valuationLogs);
+        });
+      } catch {
+        await revertImport(undoItem);
+        toast("Import failed", { description: "Could not save the imported rows" });
+        return;
+      }
+
+      pushUndo(undoItem);
+      toast(summary.title, {
+        description: summary.description,
+        duration: 6000,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            undoStack.current = undoStack.current.filter((item) => item !== undoItem);
+            void revertImport(undoItem);
+          },
+        },
+      });
+    },
+    [accounts, budgets, categories, pushUndo, revertImport, settings.defaultAccountId, transactions, valuationLogs],
+  );
+
   const undo = useCallback(async () => {
     const item = undoStack.current.pop();
     if (!item) return false;
@@ -608,6 +712,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       return true;
     }
 
+    if (item.type === "import") {
+      await revertImport(item);
+      return true;
+    }
+
     const previousBudget = item.previous;
     if (previousBudget) {
       setBudgets((current) => {
@@ -623,7 +732,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       await db.budgets.delete(item.id);
     }
     return true;
-  }, []);
+  }, [revertImport]);
 
   const focusQuickAdd = useCallback(() => {
     quickAddRef.current?.focus();
@@ -695,6 +804,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       upsertBudget,
       deleteBudget,
       undo,
+      exportWorkbook,
+      importWorkbook,
       focusQuickAdd,
       categoryById,
       accountById,
@@ -716,7 +827,9 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       deleteBudget,
       deleteTransaction,
       deleteValuationLog,
+      exportWorkbook,
       focusQuickAdd,
+      importWorkbook,
       hydrated,
       merchantMemory,
       monthSummary,
