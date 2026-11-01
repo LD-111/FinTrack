@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kindAfterCategoryChange, kindForMoneyIn, resolveCategory } from "@/lib/categorizer";
+import { kindAfterCategoryChange, kindForMoneyIn, matchCategoryToken, resolveCategory } from "@/lib/categorizer";
 import { makeCategory } from "@/test/fixtures";
 import { UNCATEGORIZED_ID, type MerchantMemory } from "@/lib/types";
 
@@ -61,6 +61,22 @@ describe("resolveCategory", () => {
         merchantMemory: [starbucks],
       }),
     ).toEqual({ categoryId: UNCATEGORIZED_ID, source: "uncategorized" });
+
+    expect(
+      resolveCategory({
+        merchantKey: "a",
+        categories,
+        merchantMemory: [starbucks],
+      }),
+    ).toEqual({ categoryId: UNCATEGORIZED_ID, source: "uncategorized" });
+  });
+
+  it("requires a unique category prefix", () => {
+    const other = makeCategory({ id: "cat_other", name: "Other", kind: "expense" });
+    const otherIncome = makeCategory({ id: "cat_other_income", name: "Other income", kind: "income" });
+    expect(matchCategoryToken("other income", [other, otherIncome])?.id).toBe(otherIncome.id);
+    expect(matchCategoryToken("oth", [other, otherIncome])).toBeUndefined();
+    expect(matchCategoryToken("food", categories)?.id).toBe(food.id);
   });
 });
 

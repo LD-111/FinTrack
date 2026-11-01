@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { formatAccountLabel } from "@/lib/accounts";
 import { currentYearMonth, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney, parseAmountToken } from "@/lib/money";
@@ -11,24 +12,15 @@ import { toMerchantKey } from "@/lib/utils";
 import type { Transaction } from "@/lib/types";
 
 export function TransactionTable() {
-  const {
-    transactions,
-    categories,
-    accounts,
-    settings,
-    selectedMonth,
-    setSelectedMonth,
-    accountFilter,
-    setAccountFilter,
-    updateTransaction,
-    deleteTransaction,
-    categoryById,
-    accountById,
-  } = useFinance();
+  const { transactions, categories, accounts, categoryById, accountById } = useLedger();
+  const { settings, selectedMonth, accountFilter } = useShell();
+  const { setSelectedMonth, setAccountFilter, updateTransaction, deleteTransaction } = useFinanceActions();
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [editing, setEditing] = useState<{ id: string; field: "description" | "amount" | "date" } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const cancelEdit = useRef(false);
 
   const usableAccounts = accounts.filter((account) => !account.isArchived);
 
@@ -48,10 +40,40 @@ export function TransactionTable() {
     });
   }, [accountFilter, categoryFilter, search, selectedMonth, showAll, transactions]);
 
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 41,
+    overscan: 12,
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const paddingTop = virtualRows[0]?.start ?? 0;
+  const paddingBottom = virtualizer.getTotalSize() - (virtualRows[virtualRows.length - 1]?.end ?? 0);
+
   async function saveAmount(transaction: Transaction, raw: string) {
     const cents = parseAmountToken(raw);
     if (cents === null || cents <= 0) return;
     await updateTransaction(transaction.id, { amountCents: cents });
+  }
+
+  function keepEdit(save: () => void) {
+    if (cancelEdit.current) {
+      cancelEdit.current = false;
+      setEditing(null);
+      return;
+    }
+    save();
+    setEditing(null);
+  }
+
+  function startEdit(id: string, field: "description" | "amount" | "date") {
+    cancelEdit.current = false;
+    setEditing({ id, field });
+  }
+
+  function cancelInlineEdit() {
+    cancelEdit.current = true;
+    setEditing(null);
   }
 
   async function saveDescription(transaction: Transaction, raw: string) {
@@ -115,7 +137,7 @@ export function TransactionTable() {
         <p className="ml-auto text-xs text-muted-foreground">{rows.length} rows</p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         {rows.length === 0 ? (
           <div className="px-5 py-16 text-center text-sm text-muted-foreground">
             Type <span className="font-medium text-foreground">12.50 Chipotle</span> above to add your first expense.
@@ -133,13 +155,23 @@ export function TransactionTable() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((transaction) => {
+              {paddingTop > 0 && (
+                <tr aria-hidden>
+                  <td colSpan={6} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                </tr>
+              )}
+              {virtualRows.map((virtualRow) => {
+                const transaction = rows[virtualRow.index];
                 const category = categoryById(transaction.categoryId);
                 const isTransfer = transaction.kind === "transfer";
                 return (
-                  <TableRow key={transaction.id}>
+                  <TableRow
+                    key={transaction.id}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                  >
                     <TableCell
-                      onClick={() => setEditing({ id: transaction.id, field: "date" })}
+                      onClick={() => startEdit(transaction.id, "date")}
                       className="cursor-text"
                     >
                       {editing?.id === transaction.id && editing.field === "date" ? (
@@ -149,14 +181,17 @@ export function TransactionTable() {
                           autoFocus
                           className="h-8"
                           onBlur={(event) => {
-                            if (event.target.value) {
-                              void updateTransaction(transaction.id, { date: event.target.value });
-                            }
-                            setEditing(null);
+                            const nextDate = event.target.value;
+                            keepEdit(() => {
+                              if (nextDate) void updateTransaction(transaction.id, { date: nextDate });
+                            });
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") event.currentTarget.blur();
-                            if (event.key === "Escape") setEditing(null);
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelInlineEdit();
+                            }
                           }}
                         />
                       ) : (
@@ -164,7 +199,7 @@ export function TransactionTable() {
                       )}
                     </TableCell>
                     <TableCell
-                      onClick={() => setEditing({ id: transaction.id, field: "description" })}
+                      onClick={() => startEdit(transaction.id, "description")}
                       className="cursor-text font-medium"
                     >
                       {editing?.id === transaction.id && editing.field === "description" ? (
@@ -173,12 +208,17 @@ export function TransactionTable() {
                           autoFocus
                           className="h-8"
                           onBlur={(event) => {
-                            void saveDescription(transaction, event.target.value);
-                            setEditing(null);
+                            const nextDescription = event.target.value;
+                            keepEdit(() => {
+                              void saveDescription(transaction, nextDescription);
+                            });
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") event.currentTarget.blur();
-                            if (event.key === "Escape") setEditing(null);
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelInlineEdit();
+                            }
                           }}
                         />
                       ) : (
@@ -229,7 +269,7 @@ export function TransactionTable() {
                       )}
                     </TableCell>
                     <TableCell
-                      onClick={() => setEditing({ id: transaction.id, field: "amount" })}
+                      onClick={() => startEdit(transaction.id, "amount")}
                       className="cursor-text text-right font-medium tabular-nums"
                     >
                       {editing?.id === transaction.id && editing.field === "amount" ? (
@@ -238,12 +278,17 @@ export function TransactionTable() {
                           autoFocus
                           className="h-8 text-right"
                           onBlur={(event) => {
-                            void saveAmount(transaction, event.target.value);
-                            setEditing(null);
+                            const nextAmount = event.target.value;
+                            keepEdit(() => {
+                              void saveAmount(transaction, nextAmount);
+                            });
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") event.currentTarget.blur();
-                            if (event.key === "Escape") setEditing(null);
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelInlineEdit();
+                            }
                           }}
                         />
                       ) : (
@@ -278,6 +323,11 @@ export function TransactionTable() {
                   </TableRow>
                 );
               })}
+              {paddingBottom > 0 && (
+                <tr aria-hidden>
+                  <td colSpan={6} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                </tr>
+              )}
             </TableBody>
           </Table>
         )}

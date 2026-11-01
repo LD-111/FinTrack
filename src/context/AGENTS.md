@@ -1,18 +1,18 @@
 # context
 
-`FinanceContext` is the only persistence gateway. Components call context methods; they do not import Dexie.
+`FinanceContext` is the only persistence gateway. Components call context methods; they do not import Dexie. `useFinance()` reads every slice. Prefer `useShell`, `useLedger`, `usePortfolio`, and `useFinanceActions` so a ledger write does not render the portfolio tab or the app shell. Action callbacks read refs and stay stable.
 
 - Hydrate once on boot after `seedIfEmpty()`. A throw here leaves `hydrated` false (the splash stays up). Fast Refresh cannot update this file (`useFinance` export) — Vite reloads the page. Hydrate rewrites existing `income` rows on a spending category to `refund` (one bulk write). That does not bump the Dexie version.
 - `previewQuickAdd` classifies a leading `+` as `refund` when the resolved category is a spending category. `updateTransaction` applies the same rule when `categoryId` changes, so a category edit does not reverse cash.
 - Fixture writes to IndexedDB are invisible until reload; context does not live-subscribe to Dexie. Dashboard/Ledger only show the current `selectedMonth`.
 - Optimistic React state, then `db.*.put/delete`.
-- `addTransactionFromQuickAdd` parses + categorizes + resolves `#account` + writes + merchant memory. Transfers skip merchant memory. Return `{ ok, reason }` — do not throw parse errors.
+- `addTransactionFromQuickAdd(raw, overrides?)` parses + categorizes + resolves `#account` + writes + merchant memory in one row. Overrides (`categoryId`, `accountId`, `toAccountId`, `date`) are how Quick Add chips commit; do not append those chips back onto the raw string. Transfers skip merchant memory. Return `{ ok, reason }` — do not throw parse errors. New rows are inserted in date order.
 - Last successful account becomes `settings.defaultAccountId`.
 - Account CRUD: `createAccount`, `updateAccount`, `archiveAccount`, `unarchiveAccount`, `deleteAccount`. Archive and delete refuse the last active account. Delete removes the account, its income and expenses, transfers that touch it, and its valuation logs, then reassigns the default account when that account was the default. One undo entry restores the account, those rows, and the previous default account.
 - Quick Add does not unarchive. If a `#token` misses every active account and matches exactly one archived account, the preview reason is `{name} is archived`. A transfer with only `#from` suggests a destination and stays incomplete (`Pick #to`, Enter does nothing) when nothing matches. A typed destination that misses is `Unknown account` or `{name} is archived` and is not replaced with a guess.
 - `accountFilter` is shared so the sidebar can open Ledger on one account.
 - `dashboardTab` (`cashflow` | `portfolio`) and `selectedPortfolioAccountId` stay in context so the sidebar can open the Portfolio tab on a portfolio account.
 - Valuation logs: `addValuationLog`, `deleteValuationLog`. Optimistic write, then Dexie. UI never imports `db`.
-- Undo stack (cap 20) covers add/update/delete transaction, budget upserts, valuation add/delete, account deletion, and one entry per workbook import.
+- Undo stack (cap 20) covers add/update/delete transaction, budget upserts, valuation add/delete, account deletion, and one entry per workbook import. Toast Undo and Ctrl+Z revert the same item and drop it from the stack. A category edit restores the previous merchant-memory row with the transaction. Ctrl+Z does this only when focus is outside a field. An unchanged budget amount does not write or push undo.
 - `exportWorkbook` downloads the ledger workbook. `importWorkbook` inserts the planned rows in one Dexie transaction. The import undo removes only the accounts, categories, transactions, budgets, and valuations that import created.
-- Derived month totals come from `src/lib/derived.ts`. Portfolio snapshots come from `src/lib/portfolio.ts`. Context overlays market value onto displayed `accountBalances` for portfolio accounts.
+- Derived month totals come from `src/lib/derived.ts`. Portfolio snapshots and chart series come from one `portfolioViews` walk. Context keeps the previous portfolio snapshot when a non-portfolio edit does not change those numbers, and overlays market value onto displayed `accountBalances` for portfolio accounts. Workbook export and import load `excel.ts` on demand.

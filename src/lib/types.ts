@@ -118,6 +118,13 @@ export interface QuickAddPreview {
   date?: string;
 }
 
+export interface QuickAddOverrides {
+  categoryId?: string;
+  accountId?: string;
+  toAccountId?: string;
+  date?: string;
+}
+
 export type QuickAddResult =
   | { ok: true; transaction: Transaction }
   | { ok: false; reason: string };

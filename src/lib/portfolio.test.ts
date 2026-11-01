@@ -85,4 +85,51 @@ describe("portfolioSnapshot", () => {
     expect(overlaid.find((row) => row.account.id === cash.id)?.balanceCents).toBe(-11_000);
     expect(overlaid.find((row) => row.account.id === brokerage.id)?.balanceCents).toBe(22_000);
   });
+
+  it("counts a fee and a dividend after a valuation without changing principal", () => {
+    const { brokerage, log } = brokerageBooks();
+    const fee = makeTransaction({
+      id: "fee",
+      kind: "expense",
+      amountCents: 100,
+      accountId: brokerage.id,
+      date: "2026-02-02",
+      createdAt: "2026-02-02T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+    });
+    const dividend = makeTransaction({
+      id: "div",
+      kind: "income",
+      amountCents: 500,
+      accountId: brokerage.id,
+      categoryId: "cat_other_income",
+      date: "2026-02-03",
+      createdAt: "2026-02-03T00:00:00.000Z",
+      updatedAt: "2026-02-03T00:00:00.000Z",
+    });
+    const snapshot = portfolioSnapshot(brokerage, [fee, dividend], [log]);
+
+    expect(snapshot.investedPrincipalCents).toBe(10_000);
+    expect(snapshot.currentValueCents).toBe(11_400);
+    expect(snapshot.profitCents).toBe(1_400);
+    expect(snapshot.twrRatio).toBeCloseTo(0.14);
+  });
+
+  it("lets a later valuation replace a fee that was already marked", () => {
+    const { brokerage, log } = brokerageBooks();
+    const fee = makeTransaction({
+      id: "fee",
+      kind: "expense",
+      amountCents: 100,
+      accountId: brokerage.id,
+      date: "2026-01-15",
+      createdAt: "2026-01-15T00:00:00.000Z",
+      updatedAt: "2026-01-15T00:00:00.000Z",
+    });
+    const snapshot = portfolioSnapshot(brokerage, [fee], [log]);
+
+    expect(snapshot.investedPrincipalCents).toBe(10_000);
+    expect(snapshot.currentValueCents).toBe(11_000);
+    expect(snapshot.profitCents).toBe(1_000);
+  });
 });

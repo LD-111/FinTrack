@@ -13,6 +13,12 @@ export interface AccountBalance {
   balanceCents: number;
 }
 
+export function compareTransactionsDesc(a: Transaction, b: Transaction): number {
+  const byDate = b.date.localeCompare(a.date);
+  if (byDate !== 0) return byDate;
+  return b.createdAt.localeCompare(a.createdAt);
+}
+
 export function filterByMonth(transactions: Transaction[], yearMonth: string): Transaction[] {
   return transactions.filter((transaction) => transaction.date.startsWith(yearMonth));
 }

@@ -10,7 +10,14 @@ export interface PortfolioPoint {
 
 type PortfolioEvent =
   | { kind: "transfer"; date: string; createdAt: string; deltaCents: number }
+  | { kind: "cash"; date: string; createdAt: string; deltaCents: number }
   | { kind: "valuation"; date: string; createdAt: string; valueCents: number; log: ValuationLog };
+
+const EVENT_RANK: Record<PortfolioEvent["kind"], number> = {
+  transfer: 0,
+  cash: 1,
+  valuation: 2,
+};
 
 function transferDelta(transaction: Transaction, accountId: string): number | null {
   if (transaction.kind !== "transfer") return null;
@@ -19,13 +26,20 @@ function transferDelta(transaction: Transaction, accountId: string): number | nu
   return null;
 }
 
+function cashDelta(transaction: Transaction, accountId: string): number | null {
+  if (transaction.accountId !== accountId) return null;
+  if (transaction.kind === "income" || transaction.kind === "refund") return transaction.amountCents;
+  if (transaction.kind === "expense") return -transaction.amountCents;
+  return null;
+}
+
 function compareChrono(
-  a: { date: string; createdAt: string; kind: string },
-  b: { date: string; createdAt: string; kind: string },
+  a: { date: string; createdAt: string; kind: PortfolioEvent["kind"] },
+  b: { date: string; createdAt: string; kind: PortfolioEvent["kind"] },
 ): number {
   if (a.date !== b.date) return a.date < b.date ? -1 : 1;
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-  if (a.kind !== b.kind) return a.kind === "transfer" ? -1 : 1;
+  if (a.kind !== b.kind) return EVENT_RANK[a.kind] - EVENT_RANK[b.kind];
   return 0;
 }
 
@@ -40,6 +54,16 @@ function collectEvents(
     if (deltaCents === null) continue;
     events.push({
       kind: "transfer",
+      date: transaction.date,
+      createdAt: transaction.createdAt,
+      deltaCents,
+    });
+  }
+  for (const transaction of transactions) {
+    const deltaCents = cashDelta(transaction, accountId);
+    if (deltaCents === null) continue;
+    events.push({
+      kind: "cash",
       date: transaction.date,
       createdAt: transaction.createdAt,
       deltaCents,
@@ -85,6 +109,8 @@ function walkPortfolio(account: Account, transactions: Transaction[], logs: Valu
       principal += event.deltaCents;
       value += event.deltaCents;
       periodStart = value;
+    } else if (event.kind === "cash") {
+      value += event.deltaCents;
     } else {
       value = event.valueCents;
       lastValuation = event.log;
@@ -124,6 +150,32 @@ export function portfolioSnapshots(
   logs: ValuationLog[],
 ): PortfolioSnapshot[] {
   return accounts.filter(isPortfolioAccount).map((account) => portfolioSnapshot(account, transactions, logs));
+}
+
+export interface PortfolioView {
+  snapshot: PortfolioSnapshot;
+  series: PortfolioPoint[];
+}
+
+export function portfolioViews(
+  accounts: Account[],
+  transactions: Transaction[],
+  logs: ValuationLog[],
+): PortfolioView[] {
+  return accounts.filter(isPortfolioAccount).map((account) => {
+    const walked = walkPortfolio(account, transactions, logs);
+    return {
+      snapshot: {
+        account,
+        investedPrincipalCents: walked.principal,
+        currentValueCents: walked.value,
+        profitCents: walked.value - walked.principal,
+        twrRatio: walked.twrRatio,
+        lastValuation: walked.lastValuation,
+      },
+      series: walked.series,
+    };
+  });
 }
 
 export function portfolioSeries(

@@ -2,14 +2,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { PortfolioPanel } from "@/components/dashboard/PortfolioPanel";
 import { VisualInsights } from "@/components/dashboard/VisualInsights";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { formatAccountLabel, isPortfolioAccount } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, formatSignedMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 export function DashboardView() {
-  const { selectedMonth, settings, dashboardTab, setDashboardTab } = useFinance();
+  const { selectedMonth, settings, dashboardTab } = useShell();
+  const { setDashboardTab } = useFinanceActions();
   const onPortfolio = dashboardTab === "portfolio";
   const monthLabel = formatMonthLabel(selectedMonth, settings.locale);
 
@@ -51,19 +52,9 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
 }
 
 function CashflowBody() {
-  const {
-    monthSummary,
-    categorySpend,
-    transactions,
-    settings,
-    categoryById,
-    accountById,
-    accountBalances,
-    setView,
-    setAccountFilter,
-    setDashboardTab,
-    setSelectedPortfolioAccountId,
-  } = useFinance();
+  const { monthSummary, categorySpend, transactions, categoryById, accountById, accountBalances } = useLedger();
+  const { settings } = useShell();
+  const { setView, setAccountFilter, setDashboardTab, setSelectedPortfolioAccountId } = useFinanceActions();
   const recent = transactions.slice(0, 8);
   const trackedBudgets = categorySpend.filter((item) => item.budgetCents !== null);
   const visibleAccounts = accountBalances.filter((row) => !row.account.isArchived);

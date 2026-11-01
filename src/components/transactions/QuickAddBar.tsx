@@ -1,26 +1,18 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { kindForMoneyIn } from "@/lib/categorizer";
 import { addDays, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney } from "@/lib/money";
-import { cn, toMerchantKey } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 type Chip = "category" | "account" | "date";
 
 export function QuickAddBar() {
-  const {
-    quickAddRef,
-    previewQuickAdd,
-    addTransactionFromQuickAdd,
-    categories,
-    accounts,
-    updateTransaction,
-    settings,
-    categoryById,
-    accountById,
-  } = useFinance();
+  const { categories, accounts, transactions, merchantMemory, categoryById, accountById } = useLedger();
+  const { settings } = useShell();
+  const { quickAddRef, previewQuickAdd, addTransactionFromQuickAdd } = useFinanceActions();
   const [value, setValue] = useState("");
   const [activeChip, setActiveChip] = useState<Chip | null>(null);
   const [categoryOverride, setCategoryOverride] = useState<string | null>(null);
@@ -28,7 +20,10 @@ export function QuickAddBar() {
   const [toAccountOverride, setToAccountOverride] = useState<string | null>(null);
   const [dateOverride, setDateOverride] = useState<string | null>(null);
 
-  const preview = useMemo(() => previewQuickAdd(value), [previewQuickAdd, value]);
+  const preview = useMemo(
+    () => previewQuickAdd(value),
+    [accounts, categories, merchantMemory, previewQuickAdd, settings.defaultAccountId, transactions, value],
+  );
   const isTransfer = preview.kind === "transfer";
   const categoryId = categoryOverride ?? preview.categoryId;
   const accountId = accountOverride ?? preview.accountId;
@@ -62,44 +57,13 @@ export function QuickAddBar() {
   }, [value]);
 
   function commit(raw = value) {
-    const toSlug = destinationChanged ? accountById(toAccountOverride ?? "")?.slug : undefined;
-    const suffix = [
-      !isTransfer && categoryOverride ? `@${categoryById(categoryOverride)?.name ?? ""}` : "",
-      !isTransfer && accountOverride ? `#${accountById(accountOverride)?.slug ?? ""}` : "",
-      isTransfer && toSlug && preview.toAccountSource !== "explicit" ? `-> #${toSlug}` : "",
-      dateOverride && dateOverride !== preview.date ? dateOverride : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-    const result = addTransactionFromQuickAdd(suffix ? `${raw} ${suffix}` : raw);
+    const result = addTransactionFromQuickAdd(raw, {
+      categoryId: !isTransfer && categoryOverride ? categoryOverride : undefined,
+      accountId: !isTransfer && accountOverride ? accountOverride : undefined,
+      toAccountId: isTransfer && toAccountOverride ? toAccountOverride : undefined,
+      date: dateOverride ?? undefined,
+    });
     if (!result.ok) return;
-
-    if (!isTransfer && categoryOverride && result.transaction.categoryId !== categoryOverride) {
-      void updateTransaction(result.transaction.id, { categoryId: categoryOverride });
-    }
-    if (!isTransfer && accountOverride && result.transaction.accountId !== accountOverride) {
-      void updateTransaction(result.transaction.id, { accountId: accountOverride });
-    }
-    if (
-      isTransfer &&
-      destinationChanged &&
-      toAccountOverride &&
-      preview.toAccountSource === "explicit" &&
-      result.transaction.toAccountId !== toAccountOverride
-    ) {
-      const nextToName = accountById(toAccountOverride)?.name ?? "Account";
-      const description = `${fromLabel} → ${nextToName}`;
-      void updateTransaction(result.transaction.id, {
-        toAccountId: toAccountOverride,
-        ...(result.transaction.description === previousGenerated
-          ? { description, merchantKey: toMerchantKey(description) }
-          : {}),
-      });
-    }
-    if (dateOverride && result.transaction.date !== dateOverride) {
-      void updateTransaction(result.transaction.id, { date: dateOverride });
-    }
 
     setValue("");
     setCategoryOverride(null);

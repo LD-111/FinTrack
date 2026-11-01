@@ -12,28 +12,21 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, usePortfolio, useShell } from "@/context/FinanceContext";
 import { formatAccountType, isPortfolioAccount } from "@/lib/accounts";
 import { formatDisplayDate } from "@/lib/dates";
 import { formatMoney, parseAmountToken } from "@/lib/money";
-import { portfolioSeries } from "@/lib/portfolio";
 import { cn } from "@/lib/utils";
 
 export function PortfolioPanel() {
-  const {
-    accounts,
-    transactions,
-    valuationLogs,
-    portfolioSnapshots,
-    selectedPortfolioAccountId,
-    setSelectedPortfolioAccountId,
-    settings,
-    addValuationLog,
-    deleteValuationLog,
-  } = useFinance();
+  const { valuationLogs, portfolioSnapshots, seriesByAccountId } = usePortfolio();
+  const { selectedPortfolioAccountId, settings } = useShell();
+  const { setSelectedPortfolioAccountId, addValuationLog, deleteValuationLog } = useFinanceActions();
   const [rawValue, setRawValue] = useState("");
 
-  const portfolioAccounts = accounts.filter((account) => !account.isArchived && isPortfolioAccount(account));
+  const portfolioAccounts = portfolioSnapshots
+    .map((row) => row.account)
+    .filter((account) => !account.isArchived && isPortfolioAccount(account));
   const snapshot = portfolioSnapshots.find((row) => row.account.id === selectedPortfolioAccountId);
   const logs = useMemo(() => {
     if (!selectedPortfolioAccountId) return [];
@@ -44,14 +37,15 @@ export function PortfolioPanel() {
   }, [selectedPortfolioAccountId, valuationLogs]);
 
   const chartData = useMemo(() => {
-    if (!snapshot) return [];
-    return portfolioSeries(snapshot.account, transactions, valuationLogs).map((point, index) => ({
+    const series = selectedPortfolioAccountId ? seriesByAccountId.get(selectedPortfolioAccountId) : undefined;
+    if (!series) return [];
+    return series.map((point, index) => ({
       step: index,
       date: point.date.slice(5),
       invested: point.investedCents / 100,
       value: point.valueCents / 100,
     }));
-  }, [snapshot, transactions, valuationLogs]);
+  }, [selectedPortfolioAccountId, seriesByAccountId]);
 
   if (portfolioAccounts.length === 0) {
     return (

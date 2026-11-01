@@ -1,7 +1,7 @@
 import { resolveDateHint, todayISO } from "@/lib/dates";
 import { parseAmountToken } from "@/lib/money";
 import { toMerchantKey } from "@/lib/utils";
-import type { ParsedQuickAdd, TransactionKind } from "@/lib/types";
+import type { Category, ParsedQuickAdd, TransactionKind } from "@/lib/types";
 
 const DATE_HINT_WORDS = new Set([
   "today",
@@ -20,7 +20,7 @@ const ARROW_TOKENS = new Set(["->", "→", ">"]);
 const TRANSFER_KEYWORDS = new Set(["transfer", "xfer"]);
 const SKIP_WORDS = new Set(["from", "to"]);
 
-export function parseQuickAdd(raw: string, today = todayISO()): ParsedQuickAdd {
+export function parseQuickAdd(raw: string, today = todayISO(), categories?: Category[]): ParsedQuickAdd {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { ok: false, reason: "Need an amount" };
@@ -32,10 +32,10 @@ export function parseQuickAdd(raw: string, today = todayISO()): ParsedQuickAdd {
   const hasArrow = tokens.some((token) => ARROW_TOKENS.has(token));
 
   if (isKeywordTransfer || hasArrow) {
-    return parseTransfer(tokens, today, isKeywordTransfer);
+    return parseTransfer(tokens, today, isKeywordTransfer, categories);
   }
 
-  return parseIncomeExpense(tokens, today);
+  return parseIncomeExpense(tokens, today, categories);
 }
 
 function expandTransferTokens(tokens: string[]): string[] {
@@ -53,7 +53,42 @@ function expandTransferTokens(tokens: string[]): string[] {
   return expanded;
 }
 
-function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
+function isReservedToken(token: string, next: string | undefined, today: string): boolean {
+  if (token.startsWith("@") || token.startsWith("#") || ARROW_TOKENS.has(token)) return true;
+  if (resolveDateHint(token, today)) return true;
+  return token.toLowerCase() === "last" && Boolean(next && DATE_HINT_WORDS.has(next.toLowerCase()));
+}
+
+function takeCategoryPhrase(
+  tokens: string[],
+  index: number,
+  today: string,
+  categories?: Category[],
+): { phrase: string; resumeIndex: number } {
+  const first = tokens[index].slice(1);
+  if (!categories || categories.length === 0) return { phrase: first, resumeIndex: index + 1 };
+
+  const names = categories.filter((category) => !category.isArchived).map((category) => category.name.toLowerCase());
+  let exactEnd = names.includes(first.toLowerCase()) ? index : -1;
+
+  for (let end = index + 1; end < tokens.length; end += 1) {
+    if (isReservedToken(tokens[end], tokens[end + 1], today)) break;
+    const phrase = [first, ...tokens.slice(index + 1, end + 1)].join(" ").toLowerCase();
+    const exact = names.includes(phrase);
+    const canGrow = names.some((name) => name.startsWith(phrase));
+    if (!exact && !canGrow) break;
+    if (exact) exactEnd = end;
+    if (exact && !names.some((name) => name.startsWith(`${phrase} `))) break;
+  }
+
+  const end = exactEnd >= index ? exactEnd : index;
+  return {
+    phrase: [first, ...tokens.slice(index + 1, end + 1)].join(" "),
+    resumeIndex: end + 1,
+  };
+}
+
+function parseIncomeExpense(tokens: string[], today: string, categories?: Category[]): ParsedQuickAdd {
   let kind: TransactionKind = "expense";
   let cursor = 0;
 
@@ -84,7 +119,9 @@ function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
   for (let i = cursor; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token.startsWith("@") && token.length > 1) {
-      categoryToken = token.slice(1);
+      const taken = takeCategoryPhrase(tokens, i, today, categories);
+      categoryToken = taken.phrase;
+      i = taken.resumeIndex - 1;
       continue;
     }
     if (token.startsWith("#") && token.length > 1) {
@@ -154,7 +191,7 @@ function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
   };
 }
 
-function parseTransfer(tokens: string[], today: string, skipKeyword: boolean): ParsedQuickAdd {
+function parseTransfer(tokens: string[], today: string, skipKeyword: boolean, categories?: Category[]): ParsedQuickAdd {
   let cursor = skipKeyword ? 1 : 0;
 
   if (tokens[cursor] === "+") {
@@ -182,6 +219,7 @@ function parseTransfer(tokens: string[], today: string, skipKeyword: boolean): P
       continue;
     }
     if (token.startsWith("@") && token.length > 1) {
+      i = takeCategoryPhrase(tokens, i, today, categories).resumeIndex - 1;
       continue;
     }
     if (token.startsWith("#") && token.length > 1) {

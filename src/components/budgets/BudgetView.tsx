@@ -1,13 +1,15 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, parseAmountToken } from "@/lib/money";
 import { UNCATEGORIZED_ID } from "@/lib/types";
 
 export function BudgetView() {
-  const { categorySpend, settings, selectedMonth, upsertBudget } = useFinance();
+  const { categorySpend } = useLedger();
+  const { settings, selectedMonth } = useShell();
+  const { upsertBudget } = useFinanceActions();
   const rows = categorySpend
     .filter((item) => item.category.id !== UNCATEGORIZED_ID)
     .slice()

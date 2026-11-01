@@ -3,7 +3,7 @@ import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ManageAccountsDialog } from "@/components/layout/ManageAccountsDialog";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { isPortfolioAccount, matchAccountsByName } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney, parseAmountToken } from "@/lib/money";
@@ -26,25 +26,18 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
 ];
 
 export function Sidebar() {
+  const { view, selectedMonth, settings, accountFilter, dashboardTab, selectedPortfolioAccountId } = useShell();
+  const { monthSummary, accountBalances, accounts } = useLedger();
   const {
-    view,
     setView,
-    monthSummary,
-    selectedMonth,
-    settings,
-    accountBalances,
-    accountFilter,
     setAccountFilter,
-    dashboardTab,
     setDashboardTab,
-    selectedPortfolioAccountId,
     setSelectedPortfolioAccountId,
-    accounts,
     createAccount,
     unarchiveAccount,
     exportWorkbook,
     importWorkbook,
-  } = useFinance();
+  } = useFinanceActions();
   const netPositive = monthSummary.netCents >= 0;
   const importRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);

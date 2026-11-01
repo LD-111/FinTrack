@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseQuickAdd } from "@/lib/parser";
+import { makeCategory } from "@/test/fixtures";
 
 const TODAY = "2026-10-31";
 
@@ -98,5 +99,24 @@ describe("parseQuickAdd", () => {
     expect(fail("500 #checking #checking").reason).toBe("Pick two different accounts");
     expect(fail("500 #checking -> #checking").reason).toBe("Pick two different accounts");
     expect(fail("500 #checking #savings #cash").reason).toBe("Transfer needs two accounts");
+  });
+
+  it("keeps a longer exact category name together", () => {
+    const categories = [
+      makeCategory({ id: "cat_other", name: "Other", kind: "expense" }),
+      makeCategory({ id: "cat_other_income", name: "Other income", kind: "income" }),
+    ];
+    expect(parseQuickAdd("+12 bonus @Other income", TODAY, categories)).toMatchObject({
+      ok: true,
+      categoryToken: "Other income",
+      description: "bonus",
+      kind: "income",
+    });
+    expect(parseQuickAdd("12 lunch @Other today", TODAY, categories)).toMatchObject({
+      ok: true,
+      categoryToken: "Other",
+      description: "lunch",
+      date: TODAY,
+    });
   });
 });

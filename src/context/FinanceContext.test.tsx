@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { planAccountDeletion } from "@/lib/accounts";
 import { FinanceProvider, useFinance, type FinanceContextValue } from "@/context/FinanceContext";
 import { db } from "@/lib/db";
+import { subscribeToasts } from "@/lib/toast";
 import { DEFAULT_ACCOUNT_ID, UNCATEGORIZED_ID, type Account } from "@/lib/types";
 
 function Reader({ slot }: { slot: { current: FinanceContextValue | null } }) {
@@ -344,5 +345,121 @@ describe("FinanceProvider undo", () => {
       expect(financeOf(slot).transactions.some((transaction) => transaction.id === transactionId)).toBe(false);
     });
     expect(await db.transactions.get(transactionId)).toBeUndefined();
+  });
+
+  it("stores chip overrides on one undo step and sorts a backdated row below a later date", async () => {
+    const slot = await mountFinance();
+
+    act(() => {
+      const today = financeOf(slot).addTransactionFromQuickAdd("12 today-lunch");
+      if (!today.ok) throw new Error(today.reason);
+      const older = financeOf(slot).addTransactionFromQuickAdd("12 old-lunch", {
+        categoryId: "cat_food",
+        date: "2000-01-01",
+      });
+      if (!older.ok) throw new Error(older.reason);
+      expect(older.transaction).toMatchObject({
+        categoryId: "cat_food",
+        date: "2000-01-01",
+        description: "old-lunch",
+        kind: "expense",
+      });
+    });
+
+    expect(financeOf(slot).transactions.map((transaction) => transaction.description)).toEqual([
+      "today-lunch",
+      "old-lunch",
+    ]);
+
+    await act(async () => {
+      expect(await financeOf(slot).undo()).toBe(true);
+      expect(await financeOf(slot).undo()).toBe(true);
+      expect(await financeOf(slot).undo()).toBe(false);
+    });
+    expect(financeOf(slot).transactions).toHaveLength(0);
+  });
+
+  it("does not insert a second budget when the same cap is saved twice", async () => {
+    const slot = await mountFinance();
+
+    await act(async () => {
+      await financeOf(slot).upsertBudget("cat_food", 1_000);
+      await financeOf(slot).upsertBudget("cat_food", 1_000);
+    });
+
+    expect(financeOf(slot).budgets.filter((budget) => budget.categoryId === "cat_food")).toHaveLength(1);
+    await act(async () => {
+      expect(await financeOf(slot).undo()).toBe(true);
+      expect(await financeOf(slot).undo()).toBe(false);
+    });
+    expect(financeOf(slot).budgets.some((budget) => budget.categoryId === "cat_food")).toBe(false);
+  });
+
+  it("does not duplicate a deleted transaction when toast undo is followed by Ctrl+Z", async () => {
+    const slot = await mountFinance();
+    let transactionId = "";
+
+    act(() => {
+      const result = financeOf(slot).addTransactionFromQuickAdd("12 lunch @food");
+      if (!result.ok) throw new Error(result.reason);
+      transactionId = result.transaction.id;
+    });
+    await act(async () => {
+      await financeOf(slot).deleteTransaction(transactionId);
+    });
+
+    let undoToast: (() => void) | undefined;
+    const stop = subscribeToasts((items) => {
+      undoToast = items.find((item) => item.title === "Deleted")?.action?.onClick;
+    });
+    expect(undoToast).toBeTypeOf("function");
+    await act(async () => {
+      undoToast?.();
+    });
+    stop();
+
+    expect(financeOf(slot).transactions.filter((transaction) => transaction.id === transactionId)).toHaveLength(1);
+    await act(async () => {
+      expect(await financeOf(slot).undo()).toBe(true);
+    });
+    expect(financeOf(slot).transactions.filter((transaction) => transaction.id === transactionId)).toHaveLength(0);
+  });
+
+  it("restores merchant memory when a category edit is undone", async () => {
+    const slot = await mountFinance();
+    let transactionId = "";
+
+    act(() => {
+      const result = financeOf(slot).addTransactionFromQuickAdd("12 lunch @food");
+      if (!result.ok) throw new Error(result.reason);
+      transactionId = result.transaction.id;
+    });
+    await waitFor(() => {
+      expect(
+        financeOf(slot).merchantMemory.some(
+          (memory) => memory.merchantKey === "lunch" && memory.categoryId === "cat_food",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      await financeOf(slot).updateTransaction(transactionId, { categoryId: "cat_groceries" });
+    });
+    expect(financeOf(slot).transactions.find((transaction) => transaction.id === transactionId)?.categoryId).toBe(
+      "cat_groceries",
+    );
+    expect(financeOf(slot).merchantMemory.find((memory) => memory.merchantKey === "lunch")?.categoryId).toBe(
+      "cat_groceries",
+    );
+
+    await act(async () => {
+      expect(await financeOf(slot).undo()).toBe(true);
+    });
+    expect(financeOf(slot).transactions.find((transaction) => transaction.id === transactionId)?.categoryId).toBe(
+      "cat_food",
+    );
+    expect(financeOf(slot).merchantMemory.find((memory) => memory.merchantKey === "lunch")?.categoryId).toBe(
+      "cat_food",
+    );
   });
 });

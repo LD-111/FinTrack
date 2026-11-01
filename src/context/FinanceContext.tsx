@@ -24,16 +24,20 @@ import { db } from "@/lib/db";
 import {
   accountBalances as deriveAccountBalances,
   categorySpendForMonth,
+  compareTransactionsDesc,
   summarizeMonth,
   type AccountBalance,
   type CategorySpend,
   type MonthSummary,
 } from "@/lib/derived";
 import { parseQuickAdd } from "@/lib/parser";
-import { overlayPortfolioValues, portfolioSnapshots as derivePortfolioSnapshots } from "@/lib/portfolio";
-import { downloadWorkbook, planWorkbookImport, summarizeImport, type ImportPlan } from "@/lib/excel";
+import {
+  overlayPortfolioValues,
+  portfolioViews,
+  type PortfolioPoint,
+  type PortfolioView,
+} from "@/lib/portfolio";
 import { formatMoney } from "@/lib/money";
-import { toMerchantKey } from "@/lib/utils";
 import { DEFAULT_SETTINGS, seedIfEmpty } from "@/lib/seed";
 import type {
   Account,
@@ -45,18 +49,21 @@ import type {
   DashboardTab,
   MerchantMemory,
   PortfolioSnapshot,
+  QuickAddOverrides,
   QuickAddPreview,
   QuickAddResult,
   Transaction,
   ValuationLog,
 } from "@/lib/types";
 import { DEFAULT_ACCOUNT_ID, TRANSFER_CATEGORY_ID } from "@/lib/types";
-import { newId, nowIso } from "@/lib/utils";
+import { newId, nowIso, toMerchantKey } from "@/lib/utils";
+
+type MemoryLink = { memoryId?: string; previousMemory?: MerchantMemory };
 
 type UndoItem =
-  | { type: "add-tx"; id: string; memoryId?: string; previousMemory?: MerchantMemory }
+  | ({ type: "add-tx"; id: string } & MemoryLink)
   | { type: "delete-tx"; transaction: Transaction }
-  | { type: "update-tx"; previous: Transaction }
+  | ({ type: "update-tx"; previous: Transaction } & MemoryLink)
   | { type: "upsert-budget"; previous: Budget | null; id: string }
   | { type: "add-valuation"; id: string }
   | { type: "delete-valuation"; log: ValuationLog }
@@ -76,32 +83,44 @@ type UndoItem =
       previousDefaultAccountId: string;
     };
 
-export interface FinanceContextValue {
+interface ShellState {
   hydrated: boolean;
   view: AppView;
-  setView: (view: AppView) => void;
   selectedMonth: string;
-  setSelectedMonth: (month: string) => void;
   accountFilter: string;
-  setAccountFilter: (accountId: string) => void;
   dashboardTab: DashboardTab;
-  setDashboardTab: (tab: DashboardTab) => void;
   selectedPortfolioAccountId: string | null;
-  setSelectedPortfolioAccountId: (accountId: string | null) => void;
   settings: AppSettings;
+}
+
+interface LedgerState {
   categories: Category[];
   accounts: Account[];
   transactions: Transaction[];
   budgets: Budget[];
   merchantMemory: MerchantMemory[];
-  valuationLogs: ValuationLog[];
   monthSummary: MonthSummary;
   categorySpend: CategorySpend[];
   accountBalances: AccountBalance[];
+  categoryById: (id: string) => Category | undefined;
+  accountById: (id: string) => Account | undefined;
+}
+
+interface PortfolioState {
+  valuationLogs: ValuationLog[];
   portfolioSnapshots: PortfolioSnapshot[];
+  seriesByAccountId: ReadonlyMap<string, PortfolioPoint[]>;
+}
+
+interface FinanceActions {
+  setView: (view: AppView) => void;
+  setSelectedMonth: (month: string) => void;
+  setAccountFilter: (accountId: string) => void;
+  setDashboardTab: (tab: DashboardTab) => void;
+  setSelectedPortfolioAccountId: (accountId: string | null) => void;
   quickAddRef: RefObject<HTMLInputElement | null>;
   previewQuickAdd: (raw: string) => QuickAddPreview;
-  addTransactionFromQuickAdd: (raw: string) => QuickAddResult;
+  addTransactionFromQuickAdd: (raw: string, overrides?: QuickAddOverrides) => QuickAddResult;
   updateTransaction: (id: string, patch: Partial<Omit<Transaction, "id" | "createdAt">>) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
   createAccount: (input: { name: string; type: AccountType; openingBalanceCents?: number }) => Promise<Account | null>;
@@ -117,31 +136,185 @@ export interface FinanceContextValue {
   exportWorkbook: () => void;
   importWorkbook: (data: ArrayBuffer) => Promise<void>;
   focusQuickAdd: () => void;
-  categoryById: (id: string) => Category | undefined;
-  accountById: (id: string) => Account | undefined;
 }
 
-const FinanceContext = createContext<FinanceContextValue | null>(null);
+export interface FinanceContextValue extends ShellState, LedgerState, PortfolioState, FinanceActions {}
+
+const ShellContext = createContext<ShellState | null>(null);
+const LedgerContext = createContext<LedgerState | null>(null);
+const PortfolioContext = createContext<PortfolioState | null>(null);
+const ActionsContext = createContext<FinanceActions | null>(null);
+
+function missingProvider(): never {
+  throw new Error("useFinance must be used within FinanceProvider");
+}
+
+function portfolioSignature(views: PortfolioView[]): string {
+  return JSON.stringify(
+    views.map(({ snapshot, series }) => ({
+      id: snapshot.account.id,
+      name: snapshot.account.name,
+      type: snapshot.account.type,
+      slug: snapshot.account.slug,
+      archived: snapshot.account.isArchived,
+      opening: snapshot.account.openingBalanceCents,
+      principal: snapshot.investedPrincipalCents,
+      value: snapshot.currentValueCents,
+      profit: snapshot.profitCents,
+      twr: snapshot.twrRatio,
+      valuation: snapshot.lastValuation?.id ?? null,
+      series,
+    })),
+  );
+}
+
+function isISODate(value: string | undefined): value is string {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
 
 export function FinanceProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
-  const [view, setView] = useState<AppView>("dashboard");
-  const [selectedMonth, setSelectedMonth] = useState(currentYearMonth);
-  const [accountFilter, setAccountFilter] = useState("all");
-  const [dashboardTab, setDashboardTab] = useState<DashboardTab>("cashflow");
-  const [selectedPortfolioAccountId, setSelectedPortfolioAccountId] = useState<string | null>(null);
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [merchantMemory, setMerchantMemory] = useState<MerchantMemory[]>([]);
-  const [valuationLogs, setValuationLogs] = useState<ValuationLog[]>([]);
+  const [view, setViewState] = useState<AppView>("dashboard");
+  const [selectedMonth, setSelectedMonthState] = useState(currentYearMonth);
+  const [accountFilter, setAccountFilterState] = useState("all");
+  const [dashboardTab, setDashboardTabState] = useState<DashboardTab>("cashflow");
+  const [selectedPortfolioAccountId, setSelectedPortfolioAccountIdState] = useState<string | null>(null);
+  const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [categories, setCategoriesState] = useState<Category[]>([]);
+  const [accounts, setAccountsState] = useState<Account[]>([]);
+  const [transactions, setTransactionsState] = useState<Transaction[]>([]);
+  const [budgets, setBudgetsState] = useState<Budget[]>([]);
+  const [merchantMemory, setMerchantMemoryState] = useState<MerchantMemory[]>([]);
+  const [valuationLogs, setValuationLogsState] = useState<ValuationLog[]>([]);
   const quickAddRef = useRef<HTMLInputElement | null>(null);
   const undoStack = useRef<UndoItem[]>([]);
+  const transactionWrites = useRef(new Map<string, Promise<void>>());
+  const memoryWrites = useRef(Promise.resolve());
+  const portfolioCache = useRef<{
+    signature: string;
+    snapshots: PortfolioSnapshot[];
+    seriesByAccountId: Map<string, PortfolioPoint[]>;
+  } | null>(null);
+
+  const settingsRef = useRef(settings);
+  const categoriesRef = useRef(categories);
+  const accountsRef = useRef(accounts);
+  const transactionsRef = useRef(transactions);
+  const budgetsRef = useRef(budgets);
+  const merchantMemoryRef = useRef(merchantMemory);
+  const valuationLogsRef = useRef(valuationLogs);
+  const accountFilterRef = useRef(accountFilter);
+  const selectedPortfolioAccountIdRef = useRef(selectedPortfolioAccountId);
+
+  const commitSettings = useCallback((next: AppSettings) => {
+    settingsRef.current = next;
+    setSettingsState(next);
+  }, []);
+  const commitCategories = useCallback((next: Category[]) => {
+    categoriesRef.current = next;
+    setCategoriesState(next);
+  }, []);
+  const commitAccounts = useCallback((next: Account[]) => {
+    accountsRef.current = next;
+    setAccountsState(next);
+  }, []);
+  const commitTransactions = useCallback((next: Transaction[]) => {
+    transactionsRef.current = next;
+    setTransactionsState(next);
+  }, []);
+  const commitBudgets = useCallback((next: Budget[]) => {
+    budgetsRef.current = next;
+    setBudgetsState(next);
+  }, []);
+  const commitMemory = useCallback((next: MerchantMemory[]) => {
+    merchantMemoryRef.current = next;
+    setMerchantMemoryState(next);
+  }, []);
+  const commitLogs = useCallback((next: ValuationLog[]) => {
+    valuationLogsRef.current = next;
+    setValuationLogsState(next);
+  }, []);
+  const commitAccountFilter = useCallback((next: string) => {
+    accountFilterRef.current = next;
+    setAccountFilterState(next);
+  }, []);
+  const commitPortfolioAccount = useCallback((next: string | null) => {
+    selectedPortfolioAccountIdRef.current = next;
+    setSelectedPortfolioAccountIdState(next);
+  }, []);
 
   const pushUndo = useCallback((item: UndoItem) => {
     undoStack.current = [...undoStack.current.slice(-19), item];
+  }, []);
+
+  const restoreMemory = useCallback(
+    async (link: MemoryLink) => {
+      if (link.previousMemory) {
+        const restored = link.previousMemory;
+        commitMemory(merchantMemoryRef.current.map((memory) => (memory.id === restored.id ? restored : memory)));
+        await db.merchantMemory.put(restored);
+      } else if (link.memoryId) {
+        const memoryId = link.memoryId;
+        commitMemory(merchantMemoryRef.current.filter((memory) => memory.id !== memoryId));
+        await db.merchantMemory.delete(memoryId);
+      }
+    },
+    [commitMemory],
+  );
+
+  const noteMemory = useCallback(
+    (item: Extract<UndoItem, { type: "add-tx" | "update-tx" }>, link: MemoryLink) => {
+      if (!undoStack.current.includes(item)) {
+        void restoreMemory(link);
+        return;
+      }
+      item.memoryId = link.memoryId;
+      item.previousMemory = link.previousMemory;
+    },
+    [restoreMemory],
+  );
+
+  const rememberMerchant = useCallback(
+    (merchantKey: string, categoryId: string) => {
+      const run = memoryWrites.current.then(async () => {
+        if (!merchantKey) return { memoryId: undefined, previousMemory: undefined };
+        const existing = merchantMemoryRef.current.find((memory) => memory.merchantKey === merchantKey);
+        const stamp = nowIso();
+        if (existing) {
+          const updated: MerchantMemory = {
+            ...existing,
+            categoryId,
+            hitCount: existing.hitCount + 1,
+            lastUsedAt: stamp,
+          };
+          commitMemory(merchantMemoryRef.current.map((memory) => (memory.id === existing.id ? updated : memory)));
+          await db.merchantMemory.put(updated);
+          return { memoryId: existing.id, previousMemory: existing };
+        }
+        const created: MerchantMemory = {
+          id: newId(),
+          merchantKey,
+          categoryId,
+          hitCount: 1,
+          lastUsedAt: stamp,
+        };
+        commitMemory([...merchantMemoryRef.current, created]);
+        await db.merchantMemory.put(created);
+        return { memoryId: created.id, previousMemory: undefined };
+      });
+      memoryWrites.current = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
+    },
+    [commitMemory],
+  );
+
+  const undoItemFromToast = useCallback((item: UndoItem, revert: (item: UndoItem) => Promise<void>) => {
+    if (!undoStack.current.includes(item)) return;
+    undoStack.current = undoStack.current.filter((entry) => entry !== item);
+    void revert(item);
   }, []);
 
   useEffect(() => {
@@ -174,19 +347,20 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       }
 
       if (cancelled) return;
-      setCategories(nextCategories);
-      setAccounts(nextAccounts);
-      setTransactions(migratedTransactions);
-      setBudgets(nextBudgets);
-      setMerchantMemory(nextMemory);
-      setValuationLogs(nextLogs);
-      setSettings({
+      const sortedTransactions = [...migratedTransactions].sort(compareTransactionsDesc);
+      commitCategories(nextCategories);
+      commitAccounts(nextAccounts);
+      commitTransactions(sortedTransactions);
+      commitBudgets(nextBudgets);
+      commitMemory(nextMemory);
+      commitLogs(nextLogs);
+      commitSettings({
         ...DEFAULT_SETTINGS,
         ...nextSettings,
         defaultAccountId: nextSettings?.defaultAccountId ?? DEFAULT_ACCOUNT_ID,
       });
       const firstPortfolio = nextAccounts.find((account) => !account.isArchived && isPortfolioAccount(account));
-      setSelectedPortfolioAccountId(firstPortfolio?.id ?? null);
+      commitPortfolioAccount(firstPortfolio?.id ?? null);
       setHydrated(true);
     }
 
@@ -194,43 +368,136 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [commitAccounts, commitBudgets, commitCategories, commitLogs, commitMemory, commitPortfolioAccount, commitSettings, commitTransactions]);
 
-  const categoryById = useCallback(
-    (id: string) => categories.find((category) => category.id === id),
-    [categories],
-  );
+  const categoriesById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+  const accountsById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const categoryById = useCallback((id: string) => categoriesById.get(id), [categoriesById]);
+  const accountById = useCallback((id: string) => accountsById.get(id), [accountsById]);
 
-  const accountById = useCallback(
-    (id: string) => accounts.find((account) => account.id === id),
-    [accounts],
-  );
-
-  const persistDefaultAccount = useCallback(
-    async (accountId: string) => {
-      if (!accountId || settings.defaultAccountId === accountId) return;
-      const next: AppSettings = { ...settings, defaultAccountId: accountId };
-      setSettings(next);
-      await db.settings.put(next);
-    },
-    [settings],
-  );
-
-  const previewQuickAdd = useCallback(
-    (raw: string): QuickAddPreview => {
-      const parsed = parseQuickAdd(raw);
-      if (!parsed.ok) {
-        return { raw, valid: false, reason: parsed.reason };
+  const actions = useMemo<FinanceActions>(() => {
+    function applyPatch(previous: Transaction, patch: Partial<Omit<Transaction, "id" | "createdAt">>): Transaction {
+      const next: Transaction = { ...previous, ...patch, updatedAt: nowIso() };
+      if (patch.categoryId && previous.kind !== "transfer") {
+        next.kind = kindAfterCategoryChange(
+          previous.kind,
+          categoriesRef.current.find((category) => category.id === patch.categoryId),
+        );
       }
+      return next;
+    }
+
+    async function revertUndoItem(item: UndoItem) {
+      if (item.type === "add-tx") {
+        commitTransactions(transactionsRef.current.filter((transaction) => transaction.id !== item.id));
+        await db.transactions.delete(item.id);
+        await restoreMemory(item);
+        return;
+      }
+      if (item.type === "delete-tx") {
+        commitTransactions([...transactionsRef.current, item.transaction].sort(compareTransactionsDesc));
+        await db.transactions.put(item.transaction);
+        return;
+      }
+      if (item.type === "update-tx") {
+        commitTransactions(
+          transactionsRef.current.map((transaction) =>
+            transaction.id === item.previous.id ? item.previous : transaction,
+          ),
+        );
+        await db.transactions.put(item.previous);
+        await restoreMemory(item);
+        return;
+      }
+      if (item.type === "add-valuation") {
+        commitLogs(valuationLogsRef.current.filter((log) => log.id !== item.id));
+        await db.valuationLogs.delete(item.id);
+        return;
+      }
+      if (item.type === "delete-valuation") {
+        commitLogs([...valuationLogsRef.current, item.log]);
+        await db.valuationLogs.put(item.log);
+        return;
+      }
+      if (item.type === "import") {
+        const accountIds = new Set(item.accountIds);
+        const categoryIds = new Set(item.categoryIds);
+        const transactionIds = new Set(item.transactionIds);
+        const budgetIds = new Set(item.budgetIds);
+        const valuationIds = new Set(item.valuationIds);
+        commitAccounts(accountsRef.current.filter((account) => !accountIds.has(account.id)));
+        commitCategories(categoriesRef.current.filter((category) => !categoryIds.has(category.id)));
+        commitTransactions(transactionsRef.current.filter((transaction) => !transactionIds.has(transaction.id)));
+        commitBudgets(budgetsRef.current.filter((budget) => !budgetIds.has(budget.id)));
+        commitLogs(valuationLogsRef.current.filter((log) => !valuationIds.has(log.id)));
+        await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
+          if (item.transactionIds.length > 0) await db.transactions.bulkDelete(item.transactionIds);
+          if (item.budgetIds.length > 0) await db.budgets.bulkDelete(item.budgetIds);
+          if (item.valuationIds.length > 0) await db.valuationLogs.bulkDelete(item.valuationIds);
+          if (item.accountIds.length > 0) await db.accounts.bulkDelete(item.accountIds);
+          if (item.categoryIds.length > 0) await db.categories.bulkDelete(item.categoryIds);
+        });
+        return;
+      }
+      if (item.type === "delete-account") {
+        const accountsNext = accountsRef.current.some((account) => account.id === item.account.id)
+          ? accountsRef.current
+          : [...accountsRef.current, item.account];
+        commitAccounts(accountsNext);
+        const ids = new Set(transactionsRef.current.map((transaction) => transaction.id));
+        const missing = item.transactions.filter((transaction) => !ids.has(transaction.id));
+        commitTransactions(
+          missing.length === 0
+            ? transactionsRef.current
+            : [...transactionsRef.current, ...missing].sort(compareTransactionsDesc),
+        );
+        const logIds = new Set(valuationLogsRef.current.map((log) => log.id));
+        const missingLogs = item.logs.filter((log) => !logIds.has(log.id));
+        commitLogs(missingLogs.length === 0 ? valuationLogsRef.current : [...valuationLogsRef.current, ...missingLogs]);
+        if (settingsRef.current.defaultAccountId !== item.previousDefaultAccountId) {
+          commitSettings({ ...settingsRef.current, defaultAccountId: item.previousDefaultAccountId });
+        }
+        await db.transaction("rw", db.accounts, db.transactions, db.valuationLogs, db.settings, async () => {
+          await db.accounts.put(item.account);
+          if (item.transactions.length > 0) await db.transactions.bulkPut(item.transactions);
+          if (item.logs.length > 0) await db.valuationLogs.bulkPut(item.logs);
+          const stored = await db.settings.get("default");
+          if (stored && stored.defaultAccountId !== item.previousDefaultAccountId) {
+            await db.settings.put({ ...stored, defaultAccountId: item.previousDefaultAccountId });
+          }
+        });
+        return;
+      }
+      const previousBudget = item.previous;
+      if (previousBudget) {
+        const exists = budgetsRef.current.some((budget) => budget.id === previousBudget.id);
+        commitBudgets(
+          exists
+            ? budgetsRef.current.map((budget) => (budget.id === previousBudget.id ? previousBudget : budget))
+            : [...budgetsRef.current, previousBudget],
+        );
+        await db.budgets.put(previousBudget);
+      } else {
+        commitBudgets(budgetsRef.current.filter((budget) => budget.id !== item.id));
+        await db.budgets.delete(item.id);
+      }
+    }
+
+    function previewQuickAdd(raw: string): QuickAddPreview {
+      const accountsNow = accountsRef.current;
+      const categoriesNow = categoriesRef.current;
+      const parsed = parseQuickAdd(raw, todayISO(), categoriesNow);
+      if (!parsed.ok) return { raw, valid: false, reason: parsed.reason };
 
       const fallbackAccount =
-        accountById(settings.defaultAccountId) ?? accounts.find((account) => !account.isArchived);
+        accountsNow.find((account) => account.id === settingsRef.current.defaultAccountId) ??
+        accountsNow.find((account) => !account.isArchived);
 
       const archivedNameFor = (token: string | undefined): string | undefined => {
         if (!token) return undefined;
         const needle = token.trim().toLowerCase().replace(/^#/, "");
         if (!needle) return undefined;
-        const activeHit = accounts.some(
+        const activeHit = accountsNow.some(
           (account) =>
             !account.isArchived &&
             (account.slug === needle ||
@@ -239,11 +506,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
               account.name.toLowerCase().startsWith(needle)),
         );
         if (activeHit) return undefined;
-        return matchArchivedAccountToken(token, accounts)?.name;
+        return matchArchivedAccountToken(token, accountsNow)?.name;
       };
 
       if (parsed.kind === "transfer") {
-        const from = parsed.accountToken ? matchAccountToken(parsed.accountToken, accounts) : undefined;
+        const from = parsed.accountToken ? matchAccountToken(parsed.accountToken, accountsNow) : undefined;
         if (!from) {
           const archivedName = archivedNameFor(parsed.accountToken);
           return {
@@ -256,26 +523,16 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
                 : "Transfer needs #from and #to",
           };
         }
-
-        const explicitTo = parsed.toAccountToken
-          ? matchAccountToken(parsed.toAccountToken, accounts)
-          : undefined;
+        const explicitTo = parsed.toAccountToken ? matchAccountToken(parsed.toAccountToken, accountsNow) : undefined;
         if (parsed.toAccountToken && !explicitTo) {
           const archivedName = archivedNameFor(parsed.toAccountToken);
-          return {
-            raw,
-            valid: false,
-            reason: archivedName ? `${archivedName} is archived` : "Unknown account",
-          };
+          return { raw, valid: false, reason: archivedName ? `${archivedName} is archived` : "Unknown account" };
         }
-        if (explicitTo && explicitTo.id === from.id) {
-          return { raw, valid: false, reason: "Pick two different accounts" };
-        }
-
+        if (explicitTo && explicitTo.id === from.id) return { raw, valid: false, reason: "Pick two different accounts" };
         const suggestion = explicitTo
           ? undefined
-          : suggestTransferDestination(from.id, parsed.amountCents, transactions, accounts);
-        const to = explicitTo ?? (suggestion ? accountById(suggestion.toAccountId) : undefined);
+          : suggestTransferDestination(from.id, parsed.amountCents, transactionsRef.current, accountsNow);
+        const to = explicitTo ?? (suggestion ? accountsNow.find((account) => account.id === suggestion.toAccountId) : undefined);
         if (!to || to.id === from.id) {
           return {
             raw,
@@ -288,9 +545,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
             date: parsed.date,
           };
         }
-
-        const description =
-          parsed.description || suggestion?.description || `${from.name} → ${to.name}`;
+        const description = parsed.description || suggestion?.description || `${from.name} → ${to.name}`;
         return {
           raw,
           valid: true,
@@ -309,9 +564,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      const account = parsed.accountToken
-        ? matchAccountToken(parsed.accountToken, accounts)
-        : fallbackAccount;
+      const account = parsed.accountToken ? matchAccountToken(parsed.accountToken, accountsNow) : fallbackAccount;
       if (parsed.accountToken && !account) {
         const archivedName = archivedNameFor(parsed.accountToken);
         return {
@@ -320,19 +573,16 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
           reason: archivedName ? `${archivedName} is archived` : `No account matches #${parsed.accountToken}`,
         };
       }
-      if (!account) {
-        return { raw, valid: false, reason: "Add an account first" };
-      }
+      if (!account) return { raw, valid: false, reason: "Add an account first" };
 
       const resolved = resolveCategory({
         categoryToken: parsed.categoryToken,
         merchantKey: parsed.merchantKey,
-        categories,
-        merchantMemory,
+        categories: categoriesNow,
+        merchantMemory: merchantMemoryRef.current,
       });
-      const resolvedCategory = categoryById(resolved.categoryId);
+      const resolvedCategory = categoriesNow.find((category) => category.id === resolved.categoryId);
       const kind = parsed.kind === "income" ? kindForMoneyIn(resolvedCategory) : parsed.kind;
-
       return {
         raw,
         valid: true,
@@ -347,296 +597,213 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         accountName: account.name,
         date: parsed.date,
       };
-    },
-    [accountById, accounts, categories, categoryById, merchantMemory, settings.defaultAccountId, transactions],
-  );
+    }
 
-  const rememberMerchant = useCallback(
-    async (merchantKey: string, categoryId: string) => {
-      if (!merchantKey) return { memoryId: undefined, previousMemory: undefined };
-      const existing = merchantMemory.find((memory) => memory.merchantKey === merchantKey);
-      const stamp = nowIso();
+    function addTransactionFromQuickAdd(raw: string, overrides?: QuickAddOverrides): QuickAddResult {
+      const preview = previewQuickAdd(raw);
+      const accountId = overrides?.accountId ?? preview.accountId;
+      const date = isISODate(overrides?.date) ? overrides.date : preview.date;
+      let toAccountId = preview.kind === "transfer" ? (overrides?.toAccountId ?? preview.toAccountId) : undefined;
+      let description = preview.description ?? "";
+      let merchantKey = preview.merchantKey ?? "";
+      let kind = preview.kind;
 
-      if (existing) {
-        const updated: MerchantMemory = {
-          ...existing,
-          categoryId,
-          hitCount: existing.hitCount + 1,
-          lastUsedAt: stamp,
-        };
-        setMerchantMemory((current) =>
-          current.map((memory) => (memory.id === existing.id ? updated : memory)),
-        );
-        await db.merchantMemory.put(updated);
-        return { memoryId: existing.id, previousMemory: existing };
+      if (kind && kind !== "transfer" && overrides?.categoryId) {
+        const category = categoriesRef.current.find((item) => item.id === overrides.categoryId);
+        if (kind === "income" || kind === "refund") kind = kindForMoneyIn(category);
+      }
+      if (kind === "transfer" && toAccountId) {
+        const fromName = preview.accountName ?? accountsRef.current.find((account) => account.id === accountId)?.name ?? "Account";
+        const to = accountsRef.current.find((account) => account.id === toAccountId);
+        const generated = preview.toAccountName ? `${fromName} → ${preview.toAccountName}` : undefined;
+        const destinationChanged = Boolean(overrides?.toAccountId && overrides.toAccountId !== preview.toAccountId);
+        if (
+          to &&
+          (destinationChanged || !description) &&
+          (!description || description === generated || preview.toAccountSource === "memory" || !preview.valid)
+        ) {
+          description = `${fromName} → ${to.name}`;
+          merchantKey = toMerchantKey(description);
+        }
       }
 
-      const created: MerchantMemory = {
-        id: newId(),
-        merchantKey,
-        categoryId,
-        hitCount: 1,
-        lastUsedAt: stamp,
-      };
-      setMerchantMemory((current) => [...current, created]);
-      await db.merchantMemory.put(created);
-      return { memoryId: created.id, previousMemory: undefined };
-    },
-    [merchantMemory],
-  );
-
-  const addTransactionFromQuickAdd = useCallback(
-    (raw: string): QuickAddResult => {
-      const preview = previewQuickAdd(raw);
-      if (
-        !preview.valid ||
-        !preview.amountCents ||
-        !preview.kind ||
-        !preview.description ||
-        !preview.date ||
-        !preview.categoryId ||
-        !preview.accountId
-      ) {
+      const categoryId = kind === "transfer" ? TRANSFER_CATEGORY_ID : (overrides?.categoryId ?? preview.categoryId);
+      if (!preview.amountCents || !kind || !date || !accountId || !categoryId) {
         return { ok: false, reason: preview.reason ?? "Need an amount" };
       }
-      if (preview.kind === "transfer" && !preview.toAccountId) {
+      if (kind === "transfer" && (!toAccountId || toAccountId === accountId)) {
         return { ok: false, reason: preview.reason ?? "Transfer needs #from and #to" };
+      }
+      if (kind !== "transfer" && !description) return { ok: false, reason: preview.reason ?? "Add a description" };
+      if (!preview.valid && !(kind === "transfer" && toAccountId)) {
+        return { ok: false, reason: preview.reason ?? "Need an amount" };
       }
 
       const stamp = nowIso();
       const transaction: Transaction = {
         id: newId(),
         amountCents: preview.amountCents,
-        kind: preview.kind,
-        accountId: preview.accountId,
-        toAccountId: preview.kind === "transfer" ? preview.toAccountId : undefined,
-        description: preview.description,
-        merchantKey: preview.merchantKey ?? "",
-        categoryId: preview.categoryId,
-        date: preview.date,
+        kind,
+        accountId,
+        toAccountId: kind === "transfer" ? toAccountId : undefined,
+        description,
+        merchantKey: merchantKey || (description ? toMerchantKey(description) : ""),
+        categoryId,
+        date,
         createdAt: stamp,
         updatedAt: stamp,
       };
-
-      setTransactions((current) => [transaction, ...current]);
+      commitTransactions([...transactionsRef.current, transaction].sort(compareTransactionsDesc));
       void db.transactions.put(transaction);
       void persistDefaultAccount(transaction.accountId);
-      if (transaction.kind !== "transfer") {
-        void rememberMerchant(transaction.merchantKey, transaction.categoryId).then((memory) => {
-          pushUndo({ type: "add-tx", id: transaction.id, ...memory });
-        });
-      } else {
-        pushUndo({ type: "add-tx", id: transaction.id });
+      const undoItem: Extract<UndoItem, { type: "add-tx" }> = { type: "add-tx", id: transaction.id };
+      pushUndo(undoItem);
+      if (transaction.kind !== "transfer" && transaction.merchantKey) {
+        void rememberMerchant(transaction.merchantKey, transaction.categoryId).then((memory) => noteMemory(undoItem, memory));
       }
-
       toast("Added", {
         description: transaction.description,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void (async () => {
-              undoStack.current = undoStack.current.filter((item) => !(item.type === "add-tx" && item.id === transaction.id));
-              setTransactions((current) => current.filter((item) => item.id !== transaction.id));
-              await db.transactions.delete(transaction.id);
-            })();
-          },
-        },
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
         duration: 5000,
       });
-
       return { ok: true, transaction };
-    },
-    [persistDefaultAccount, previewQuickAdd, pushUndo, rememberMerchant],
-  );
+    }
 
-  const updateTransaction = useCallback(
-    async (id: string, patch: Partial<Omit<Transaction, "id" | "createdAt">>) => {
-      const previous = transactions.find((transaction) => transaction.id === id);
+    async function persistDefaultAccount(accountId: string) {
+      if (!accountId || settingsRef.current.defaultAccountId === accountId) return;
+      const next: AppSettings = { ...settingsRef.current, defaultAccountId: accountId };
+      commitSettings(next);
+      await db.settings.put(next);
+    }
+
+    function enqueueTransaction(id: string, task: () => Promise<void>) {
+      const previous = transactionWrites.current.get(id) ?? Promise.resolve();
+      const job = previous.then(task, task);
+      transactionWrites.current.set(
+        id,
+        job.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      return job;
+    }
+
+    function updateTransaction(id: string, patch: Partial<Omit<Transaction, "id" | "createdAt">>) {
+      return enqueueTransaction(id, async () => {
+        const previous = transactionsRef.current.find((transaction) => transaction.id === id);
+        if (!previous) return;
+        const next = applyPatch(previous, patch);
+        commitTransactions(transactionsRef.current.map((transaction) => (transaction.id === id ? next : transaction)));
+        const undoItem: Extract<UndoItem, { type: "update-tx" }> = { type: "update-tx", previous };
+        pushUndo(undoItem);
+        await db.transactions.put(next);
+        if (patch.categoryId && next.merchantKey && next.kind !== "transfer") {
+          const memory = await rememberMerchant(next.merchantKey, next.categoryId);
+          noteMemory(undoItem, memory);
+        }
+      });
+    }
+
+    async function deleteTransaction(id: string) {
+      const previous = transactionsRef.current.find((transaction) => transaction.id === id);
       if (!previous) return;
-
-      const next: Transaction = {
-        ...previous,
-        ...patch,
-        updatedAt: nowIso(),
-      };
-      if (patch.categoryId && previous.kind !== "transfer") {
-        next.kind = kindAfterCategoryChange(previous.kind, categoryById(patch.categoryId));
-      }
-      setTransactions((current) => current.map((transaction) => (transaction.id === id ? next : transaction)));
-      await db.transactions.put(next);
-      pushUndo({ type: "update-tx", previous });
-
-      if (patch.categoryId && next.merchantKey && next.kind !== "transfer") {
-        await rememberMerchant(next.merchantKey, next.categoryId);
-      }
-    },
-    [categoryById, pushUndo, rememberMerchant, transactions],
-  );
-
-  const deleteTransaction = useCallback(
-    async (id: string) => {
-      const previous = transactions.find((transaction) => transaction.id === id);
-      if (!previous) return;
-      setTransactions((current) => current.filter((transaction) => transaction.id !== id));
+      commitTransactions(transactionsRef.current.filter((transaction) => transaction.id !== id));
       await db.transactions.delete(id);
-      pushUndo({ type: "delete-tx", transaction: previous });
+      const undoItem: Extract<UndoItem, { type: "delete-tx" }> = { type: "delete-tx", transaction: previous };
+      pushUndo(undoItem);
       toast("Deleted", {
         description: previous.description,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void (async () => {
-              setTransactions((current) => [previous, ...current]);
-              await db.transactions.put(previous);
-            })();
-          },
-        },
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
         duration: 5000,
       });
-    },
-    [pushUndo, transactions],
-  );
+    }
 
-  const createAccount = useCallback(
-    async (input: { name: string; type: AccountType; openingBalanceCents?: number }) => {
+    async function createAccount(input: { name: string; type: AccountType; openingBalanceCents?: number }) {
       const name = input.name.trim();
       if (!name) return null;
-
       const stamp = nowIso();
       const account: Account = {
         id: newId(),
         name,
         type: input.type,
-        slug: uniqueAccountSlug(name, accounts),
+        slug: uniqueAccountSlug(name, accountsRef.current),
         openingBalanceCents: input.openingBalanceCents ?? 0,
         isArchived: false,
         createdAt: stamp,
         updatedAt: stamp,
       };
-      setAccounts((current) => [...current, account]);
+      commitAccounts([...accountsRef.current, account]);
       await db.accounts.put(account);
       return account;
-    },
-    [accounts],
-  );
+    }
 
-  const updateAccount = useCallback(
-    async (id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) => {
-      const previous = accounts.find((account) => account.id === id);
+    async function updateAccount(id: string, patch: Partial<Omit<Account, "id" | "createdAt">>) {
+      const previous = accountsRef.current.find((account) => account.id === id);
       if (!previous) return;
-
       const next: Account = {
         ...previous,
         ...patch,
-        slug: patch.name ? uniqueAccountSlug(patch.name, accounts.filter((account) => account.id !== id)) : previous.slug,
+        slug: patch.name
+          ? uniqueAccountSlug(patch.name, accountsRef.current.filter((account) => account.id !== id))
+          : previous.slug,
         updatedAt: nowIso(),
       };
-      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      commitAccounts(accountsRef.current.map((account) => (account.id === id ? next : account)));
       await db.accounts.put(next);
-    },
-    [accounts],
-  );
+    }
 
-  const archiveAccount = useCallback(
-    async (id: string) => {
-      const previous = accounts.find((account) => account.id === id);
+    async function archiveAccount(id: string) {
+      const previous = accountsRef.current.find((account) => account.id === id);
       if (!previous || previous.isArchived) return;
-
-      const active = accounts.filter((account) => !account.isArchived && account.id !== id);
+      const active = accountsRef.current.filter((account) => !account.isArchived && account.id !== id);
       if (active.length === 0) return;
-
       const next: Account = { ...previous, isArchived: true, updatedAt: nowIso() };
-      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      commitAccounts(accountsRef.current.map((account) => (account.id === id ? next : account)));
       await db.accounts.put(next);
+      if (settingsRef.current.defaultAccountId === id) await persistDefaultAccount(active[0].id);
+      if (accountFilterRef.current === id) commitAccountFilter("all");
+      if (selectedPortfolioAccountIdRef.current === id) {
+        commitPortfolioAccount(active.find((account) => isPortfolioAccount(account))?.id ?? null);
+      }
+    }
 
-      if (settings.defaultAccountId === id) {
-        await persistDefaultAccount(active[0].id);
-      }
-      if (accountFilter === id) {
-        setAccountFilter("all");
-      }
-      if (selectedPortfolioAccountId === id) {
-        const nextPortfolio = active.find((account) => isPortfolioAccount(account));
-        setSelectedPortfolioAccountId(nextPortfolio?.id ?? null);
-      }
-    },
-    [accountFilter, accounts, persistDefaultAccount, selectedPortfolioAccountId, settings.defaultAccountId],
-  );
-
-  const unarchiveAccount = useCallback(
-    async (id: string) => {
-      const previous = accounts.find((account) => account.id === id);
+    async function unarchiveAccount(id: string) {
+      const previous = accountsRef.current.find((account) => account.id === id);
       if (!previous || !previous.isArchived) return;
-
       const next: Account = { ...previous, isArchived: false, updatedAt: nowIso() };
-      setAccounts((current) => current.map((account) => (account.id === id ? next : account)));
+      commitAccounts(accountsRef.current.map((account) => (account.id === id ? next : account)));
       await db.accounts.put(next);
-    },
-    [accounts],
-  );
+    }
 
-  const restoreDeletedAccount = useCallback(async (item: Extract<UndoItem, { type: "delete-account" }>) => {
-    setAccounts((current) =>
-      current.some((account) => account.id === item.account.id) ? current : [...current, item.account],
-    );
-    setTransactions((current) => {
-      const ids = new Set(current.map((transaction) => transaction.id));
-      const missing = item.transactions.filter((transaction) => !ids.has(transaction.id));
-      if (missing.length === 0) return current;
-      return [...current, ...missing].sort(
-        (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
-      );
-    });
-    setValuationLogs((current) => {
-      const ids = new Set(current.map((log) => log.id));
-      const missing = item.logs.filter((log) => !ids.has(log.id));
-      return missing.length === 0 ? current : [...current, ...missing];
-    });
-    setSettings((current) =>
-      current.defaultAccountId === item.previousDefaultAccountId
-        ? current
-        : { ...current, defaultAccountId: item.previousDefaultAccountId },
-    );
-
-    await db.transaction("rw", db.accounts, db.transactions, db.valuationLogs, db.settings, async () => {
-      await db.accounts.put(item.account);
-      if (item.transactions.length > 0) await db.transactions.bulkPut(item.transactions);
-      if (item.logs.length > 0) await db.valuationLogs.bulkPut(item.logs);
-      const stored = await db.settings.get("default");
-      if (stored && stored.defaultAccountId !== item.previousDefaultAccountId) {
-        await db.settings.put({ ...stored, defaultAccountId: item.previousDefaultAccountId });
-      }
-    });
-  }, []);
-
-  const deleteAccount = useCallback(
-    async (id: string) => {
-      const previous = accounts.find((account) => account.id === id);
+    async function deleteAccount(id: string) {
+      const previous = accountsRef.current.find((account) => account.id === id);
       if (!previous) return false;
-
-      const active = accounts.filter((account) => !account.isArchived && account.id !== id);
+      const active = accountsRef.current.filter((account) => !account.isArchived && account.id !== id);
       if (active.length === 0) return false;
-
-      const plan = planAccountDeletion(id, transactions, valuationLogs);
+      const plan = planAccountDeletion(id, transactionsRef.current, valuationLogsRef.current);
       const transactionIds = new Set(plan.transactionIds);
       const valuationIds = new Set(plan.valuationIds);
-      const removedTransactions = transactions.filter((transaction) => transactionIds.has(transaction.id));
-      const removedLogs = valuationLogs.filter((log) => valuationIds.has(log.id));
-      const previousDefaultAccountId = settings.defaultAccountId;
+      const removedTransactions = transactionsRef.current.filter((transaction) => transactionIds.has(transaction.id));
+      const removedLogs = valuationLogsRef.current.filter((log) => valuationIds.has(log.id));
+      const previousDefaultAccountId = settingsRef.current.defaultAccountId;
       const nextDefaultId = previousDefaultAccountId === id ? active[0].id : previousDefaultAccountId;
-      const previousFilter = accountFilter;
-      const previousPortfolioId = selectedPortfolioAccountId;
+      const previousFilter = accountFilterRef.current;
+      const previousPortfolioId = selectedPortfolioAccountIdRef.current;
+      const accountsBefore = accountsRef.current;
+      const transactionsBefore = transactionsRef.current;
+      const logsBefore = valuationLogsRef.current;
+      const settingsBefore = settingsRef.current;
 
-      setAccounts((current) => current.filter((account) => account.id !== id));
-      setTransactions((current) => current.filter((transaction) => !transactionIds.has(transaction.id)));
-      setValuationLogs((current) => current.filter((log) => !valuationIds.has(log.id)));
+      commitAccounts(accountsBefore.filter((account) => account.id !== id));
+      commitTransactions(transactionsBefore.filter((transaction) => !transactionIds.has(transaction.id)));
+      commitLogs(logsBefore.filter((log) => !valuationIds.has(log.id)));
       if (nextDefaultId !== previousDefaultAccountId) {
-        setSettings((current) => ({ ...current, defaultAccountId: nextDefaultId }));
+        commitSettings({ ...settingsBefore, defaultAccountId: nextDefaultId });
       }
-      if (accountFilter === id) setAccountFilter("all");
-      if (selectedPortfolioAccountId === id) {
-        const nextPortfolio = active.find((account) => isPortfolioAccount(account));
-        setSelectedPortfolioAccountId(nextPortfolio?.id ?? null);
+      if (previousFilter === id) commitAccountFilter("all");
+      if (previousPortfolioId === id) {
+        commitPortfolioAccount(active.find((account) => isPortfolioAccount(account))?.id ?? null);
       }
 
       const undoItem: Extract<UndoItem, { type: "delete-account" }> = {
@@ -653,28 +820,16 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
           if (plan.valuationIds.length > 0) await db.valuationLogs.bulkDelete(plan.valuationIds);
           await db.accounts.delete(id);
           if (nextDefaultId !== previousDefaultAccountId) {
-            await db.settings.put({ ...settings, defaultAccountId: nextDefaultId });
+            await db.settings.put({ ...settingsRef.current, defaultAccountId: nextDefaultId });
           }
         });
       } catch {
-        setAccounts((current) =>
-          current.some((account) => account.id === previous.id) ? current : [...current, previous],
-        );
-        setTransactions((current) => {
-          const ids = new Set(current.map((transaction) => transaction.id));
-          const missing = removedTransactions.filter((transaction) => !ids.has(transaction.id));
-          return missing.length === 0 ? current : [...current, ...missing];
-        });
-        setValuationLogs((current) => {
-          const ids = new Set(current.map((log) => log.id));
-          const missing = removedLogs.filter((log) => !ids.has(log.id));
-          return missing.length === 0 ? current : [...current, ...missing];
-        });
-        if (nextDefaultId !== previousDefaultAccountId) {
-          setSettings((current) => ({ ...current, defaultAccountId: previousDefaultAccountId }));
-        }
-        setAccountFilter(previousFilter);
-        setSelectedPortfolioAccountId(previousPortfolioId);
+        commitAccounts(accountsBefore);
+        commitTransactions(transactionsBefore);
+        commitLogs(logsBefore);
+        commitSettings(settingsBefore);
+        commitAccountFilter(previousFilter);
+        commitPortfolioAccount(previousPortfolioId);
         toast("Could not remove account", { description: previous.name });
         return false;
       }
@@ -682,35 +837,14 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       pushUndo(undoItem);
       toast("Account removed", {
         description: previous.name,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            undoStack.current = undoStack.current.filter((item) => item !== undoItem);
-            void restoreDeletedAccount(undoItem);
-          },
-        },
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
         duration: 5000,
       });
       return true;
-    },
-    [
-      accountFilter,
-      accounts,
-      pushUndo,
-      restoreDeletedAccount,
-      selectedPortfolioAccountId,
-      settings,
-      transactions,
-      valuationLogs,
-    ],
-  );
+    }
 
-  const addValuationLog = useCallback(
-    async (input: { accountId: string; valueCents: number; date?: string }) => {
-      if (!input.accountId || !Number.isFinite(input.valueCents) || input.valueCents < 0) {
-        return null;
-      }
-
+    async function addValuationLog(input: { accountId: string; valueCents: number; date?: string }) {
+      if (!input.accountId || !Number.isFinite(input.valueCents) || input.valueCents < 0) return null;
       const log: ValuationLog = {
         id: newId(),
         accountId: input.accountId,
@@ -718,129 +852,85 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         date: input.date ?? todayISO(),
         createdAt: nowIso(),
       };
-      setValuationLogs((current) => [...current, log]);
+      commitLogs([...valuationLogsRef.current, log]);
       await db.valuationLogs.put(log);
-      pushUndo({ type: "add-valuation", id: log.id });
+      const undoItem: Extract<UndoItem, { type: "add-valuation" }> = { type: "add-valuation", id: log.id };
+      pushUndo(undoItem);
       toast("Value logged", {
-        description: formatMoney(log.valueCents, settings.currency, settings.locale),
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void (async () => {
-              undoStack.current = undoStack.current.filter(
-                (item) => !(item.type === "add-valuation" && item.id === log.id),
-              );
-              setValuationLogs((current) => current.filter((item) => item.id !== log.id));
-              await db.valuationLogs.delete(log.id);
-            })();
-          },
-        },
+        description: formatMoney(log.valueCents, settingsRef.current.currency, settingsRef.current.locale),
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
         duration: 5000,
       });
       return log;
-    },
-    [pushUndo, settings.currency, settings.locale],
-  );
+    }
 
-  const deleteValuationLog = useCallback(
-    async (id: string) => {
-      const previous = valuationLogs.find((log) => log.id === id);
+    async function deleteValuationLog(id: string) {
+      const previous = valuationLogsRef.current.find((log) => log.id === id);
       if (!previous) return;
-      setValuationLogs((current) => current.filter((log) => log.id !== id));
+      commitLogs(valuationLogsRef.current.filter((log) => log.id !== id));
       await db.valuationLogs.delete(id);
-      pushUndo({ type: "delete-valuation", log: previous });
+      const undoItem: Extract<UndoItem, { type: "delete-valuation" }> = { type: "delete-valuation", log: previous };
+      pushUndo(undoItem);
       toast("Valuation removed", {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void (async () => {
-              setValuationLogs((current) => [...current, previous]);
-              await db.valuationLogs.put(previous);
-            })();
-          },
-        },
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
         duration: 5000,
       });
-    },
-    [pushUndo, valuationLogs],
-  );
+    }
 
-  const upsertBudget = useCallback(
-    async (categoryId: string, amountCents: number) => {
-      const existing = budgets.find((budget) => budget.categoryId === categoryId);
+    async function upsertBudget(categoryId: string, amountCents: number) {
+      const existing = budgetsRef.current.find((budget) => budget.categoryId === categoryId);
       const stamp = nowIso();
       if (amountCents <= 0) {
         if (!existing) return;
-        setBudgets((current) => current.filter((budget) => budget.id !== existing.id));
+        commitBudgets(budgetsRef.current.filter((budget) => budget.id !== existing.id));
         await db.budgets.delete(existing.id);
         pushUndo({ type: "upsert-budget", previous: existing, id: existing.id });
         return;
       }
-
+      if (existing && existing.amountCents === amountCents) return;
       const next: Budget = existing
         ? { ...existing, amountCents, updatedAt: stamp }
-        : {
-            id: newId(),
-            categoryId,
-            amountCents,
-            period: "monthly",
-            createdAt: stamp,
-            updatedAt: stamp,
-          };
-
-      setBudgets((current) => {
-        if (existing) {
-          return current.map((budget) => (budget.id === existing.id ? next : budget));
-        }
-        return [...current, next];
-      });
+        : { id: newId(), categoryId, amountCents, period: "monthly", createdAt: stamp, updatedAt: stamp };
+      commitBudgets(
+        existing
+          ? budgetsRef.current.map((budget) => (budget.id === existing.id ? next : budget))
+          : [...budgetsRef.current, next],
+      );
       await db.budgets.put(next);
       pushUndo({ type: "upsert-budget", previous: existing ?? null, id: next.id });
-    },
-    [budgets, pushUndo],
-  );
+    }
 
-  const deleteBudget = useCallback(
-    async (id: string) => {
-      const existing = budgets.find((budget) => budget.id === id);
+    async function deleteBudget(id: string) {
+      const existing = budgetsRef.current.find((budget) => budget.id === id);
       if (!existing) return;
-      setBudgets((current) => current.filter((budget) => budget.id !== id));
+      commitBudgets(budgetsRef.current.filter((budget) => budget.id !== id));
       await db.budgets.delete(id);
       pushUndo({ type: "upsert-budget", previous: existing, id });
-    },
-    [budgets, pushUndo],
-  );
+    }
 
-  const revertImport = useCallback(async (item: Extract<UndoItem, { type: "import" }>) => {
-    const accountIds = new Set(item.accountIds);
-    const categoryIds = new Set(item.categoryIds);
-    const transactionIds = new Set(item.transactionIds);
-    const budgetIds = new Set(item.budgetIds);
-    const valuationIds = new Set(item.valuationIds);
-    setAccounts((current) => current.filter((account) => !accountIds.has(account.id)));
-    setCategories((current) => current.filter((category) => !categoryIds.has(category.id)));
-    setTransactions((current) => current.filter((transaction) => !transactionIds.has(transaction.id)));
-    setBudgets((current) => current.filter((budget) => !budgetIds.has(budget.id)));
-    setValuationLogs((current) => current.filter((log) => !valuationIds.has(log.id)));
-    await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
-      if (item.transactionIds.length > 0) await db.transactions.bulkDelete(item.transactionIds);
-      if (item.budgetIds.length > 0) await db.budgets.bulkDelete(item.budgetIds);
-      if (item.valuationIds.length > 0) await db.valuationLogs.bulkDelete(item.valuationIds);
-      if (item.accountIds.length > 0) await db.accounts.bulkDelete(item.accountIds);
-      if (item.categoryIds.length > 0) await db.categories.bulkDelete(item.categoryIds);
-    });
-  }, []);
+    function exportWorkbook() {
+      const ledger = {
+        accounts: accountsRef.current,
+        categories: categoriesRef.current,
+        transactions: transactionsRef.current,
+        budgets: budgetsRef.current,
+        valuationLogs: valuationLogsRef.current,
+      };
+      void import("@/lib/excel").then(({ downloadWorkbook }) => downloadWorkbook(ledger));
+    }
 
-  const exportWorkbook = useCallback(() => {
-    downloadWorkbook({ accounts, categories, transactions, budgets, valuationLogs });
-  }, [accounts, budgets, categories, transactions, valuationLogs]);
-
-  const importWorkbook = useCallback(
-    async (data: ArrayBuffer) => {
-      const plan: ImportPlan = planWorkbookImport(
+    async function importWorkbook(data: ArrayBuffer) {
+      const { planWorkbookImport, summarizeImport } = await import("@/lib/excel");
+      const plan = planWorkbookImport(
         data,
-        { accounts, categories, transactions, budgets, valuationLogs },
-        settings.defaultAccountId,
+        {
+          accounts: accountsRef.current,
+          categories: categoriesRef.current,
+          transactions: transactionsRef.current,
+          budgets: budgetsRef.current,
+          valuationLogs: valuationLogsRef.current,
+        },
+        settingsRef.current.defaultAccountId,
       );
       const inserted =
         plan.accounts.length +
@@ -849,22 +939,15 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         plan.budgets.length +
         plan.valuationLogs.length;
       const summary = summarizeImport(plan);
-
       if (inserted === 0) {
         toast(summary.title, { description: summary.description, duration: 6000 });
         return;
       }
-
-      setCategories((current) => [...current, ...plan.categories]);
-      setAccounts((current) => [...current, ...plan.accounts]);
-      setTransactions((current) =>
-        [...current, ...plan.transactions].sort(
-          (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
-        ),
-      );
-      setBudgets((current) => [...current, ...plan.budgets]);
-      setValuationLogs((current) => [...current, ...plan.valuationLogs]);
-
+      commitCategories([...categoriesRef.current, ...plan.categories]);
+      commitAccounts([...accountsRef.current, ...plan.accounts]);
+      commitTransactions([...transactionsRef.current, ...plan.transactions].sort(compareTransactionsDesc));
+      commitBudgets([...budgetsRef.current, ...plan.budgets]);
+      commitLogs([...valuationLogsRef.current, ...plan.valuationLogs]);
       const undoItem: Extract<UndoItem, { type: "import" }> = {
         type: "import",
         accountIds: plan.accounts.map((account) => account.id),
@@ -873,7 +956,6 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         budgetIds: plan.budgets.map((budget) => budget.id),
         valuationIds: plan.valuationLogs.map((log) => log.id),
       };
-
       try {
         await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
           if (plan.categories.length > 0) await db.categories.bulkAdd(plan.categories);
@@ -883,156 +965,31 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
           if (plan.valuationLogs.length > 0) await db.valuationLogs.bulkAdd(plan.valuationLogs);
         });
       } catch {
-        await revertImport(undoItem);
+        await revertUndoItem(undoItem);
         toast("Import failed", { description: "Could not save the imported rows" });
         return;
       }
-
       pushUndo(undoItem);
       toast(summary.title, {
         description: summary.description,
         duration: 6000,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            undoStack.current = undoStack.current.filter((item) => item !== undoItem);
-            void revertImport(undoItem);
-          },
-        },
+        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
       });
-    },
-    [accounts, budgets, categories, pushUndo, revertImport, settings.defaultAccountId, transactions, valuationLogs],
-  );
+    }
 
-  const undo = useCallback(async () => {
-    const item = undoStack.current.pop();
-    if (!item) return false;
-
-    if (item.type === "add-tx") {
-      setTransactions((current) => current.filter((transaction) => transaction.id !== item.id));
-      await db.transactions.delete(item.id);
-      if (item.previousMemory) {
-        setMerchantMemory((current) =>
-          current.map((memory) => (memory.id === item.previousMemory?.id ? item.previousMemory : memory)),
-        );
-        await db.merchantMemory.put(item.previousMemory);
-      } else if (item.memoryId) {
-        setMerchantMemory((current) => current.filter((memory) => memory.id !== item.memoryId));
-        await db.merchantMemory.delete(item.memoryId);
-      }
+    async function undo() {
+      const item = undoStack.current.pop();
+      if (!item) return false;
+      await revertUndoItem(item);
       return true;
     }
 
-    if (item.type === "delete-tx") {
-      setTransactions((current) => [item.transaction, ...current]);
-      await db.transactions.put(item.transaction);
-      return true;
-    }
-
-    if (item.type === "update-tx") {
-      setTransactions((current) =>
-        current.map((transaction) => (transaction.id === item.previous.id ? item.previous : transaction)),
-      );
-      await db.transactions.put(item.previous);
-      return true;
-    }
-
-    if (item.type === "add-valuation") {
-      setValuationLogs((current) => current.filter((log) => log.id !== item.id));
-      await db.valuationLogs.delete(item.id);
-      return true;
-    }
-
-    if (item.type === "delete-valuation") {
-      setValuationLogs((current) => [...current, item.log]);
-      await db.valuationLogs.put(item.log);
-      return true;
-    }
-
-    if (item.type === "import") {
-      await revertImport(item);
-      return true;
-    }
-
-    if (item.type === "delete-account") {
-      await restoreDeletedAccount(item);
-      return true;
-    }
-
-    const previousBudget = item.previous;
-    if (previousBudget) {
-      setBudgets((current) => {
-        const exists = current.some((budget) => budget.id === previousBudget.id);
-        if (exists) {
-          return current.map((budget) => (budget.id === previousBudget.id ? previousBudget : budget));
-        }
-        return [...current, previousBudget];
-      });
-      await db.budgets.put(previousBudget);
-    } else {
-      setBudgets((current) => current.filter((budget) => budget.id !== item.id));
-      await db.budgets.delete(item.id);
-    }
-    return true;
-  }, [restoreDeletedAccount, revertImport]);
-
-  const focusQuickAdd = useCallback(() => {
-    quickAddRef.current?.focus();
-    quickAddRef.current?.select();
-  }, []);
-
-  const monthSummary = useMemo(
-    () => summarizeMonth(transactions, selectedMonth),
-    [selectedMonth, transactions],
-  );
-
-  const categorySpend = useMemo(
-    () => categorySpendForMonth(transactions, categories, budgets, selectedMonth),
-    [budgets, categories, selectedMonth, transactions],
-  );
-
-  const portfolioSnapshotRows = useMemo(
-    () => derivePortfolioSnapshots(accounts, transactions, valuationLogs),
-    [accounts, transactions, valuationLogs],
-  );
-
-  const accountBalanceRows = useMemo(
-    () => overlayPortfolioValues(deriveAccountBalances(accounts, transactions), portfolioSnapshotRows),
-    [accounts, portfolioSnapshotRows, transactions],
-  );
-
-  useEffect(() => {
-    const active = accounts.filter((account) => !account.isArchived && isPortfolioAccount(account));
-    if (selectedPortfolioAccountId && active.some((account) => account.id === selectedPortfolioAccountId)) {
-      return;
-    }
-    setSelectedPortfolioAccountId(active[0]?.id ?? null);
-  }, [accounts, selectedPortfolioAccountId]);
-
-  const value = useMemo<FinanceContextValue>(
-    () => ({
-      hydrated,
-      view,
-      setView,
-      selectedMonth,
-      setSelectedMonth,
-      accountFilter,
-      setAccountFilter,
-      dashboardTab,
-      setDashboardTab,
-      selectedPortfolioAccountId,
-      setSelectedPortfolioAccountId,
-      settings,
-      categories,
-      accounts,
-      transactions,
-      budgets,
-      merchantMemory,
-      valuationLogs,
-      monthSummary,
-      categorySpend,
-      accountBalances: accountBalanceRows,
-      portfolioSnapshots: portfolioSnapshotRows,
+    return {
+      setView: setViewState,
+      setSelectedMonth: setSelectedMonthState,
+      setAccountFilter: commitAccountFilter,
+      setDashboardTab: setDashboardTabState,
+      setSelectedPortfolioAccountId: commitPortfolioAccount,
       quickAddRef,
       previewQuickAdd,
       addTransactionFromQuickAdd,
@@ -1050,57 +1007,138 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       undo,
       exportWorkbook,
       importWorkbook,
-      focusQuickAdd,
+      focusQuickAdd: () => {
+        quickAddRef.current?.focus();
+        quickAddRef.current?.select();
+      },
+    };
+  }, [
+    commitAccountFilter,
+    commitAccounts,
+    commitBudgets,
+    commitCategories,
+    commitLogs,
+    commitMemory,
+    commitPortfolioAccount,
+    commitSettings,
+    commitTransactions,
+    noteMemory,
+    pushUndo,
+    rememberMerchant,
+    restoreMemory,
+    undoItemFromToast,
+  ]);
+
+  const monthSummary = useMemo(() => summarizeMonth(transactions, selectedMonth), [selectedMonth, transactions]);
+  const categorySpend = useMemo(
+    () => categorySpendForMonth(transactions, categories, budgets, selectedMonth),
+    [budgets, categories, selectedMonth, transactions],
+  );
+  const portfolioModel = useMemo(() => {
+    const views = portfolioViews(accounts, transactions, valuationLogs);
+    const signature = portfolioSignature(views);
+    if (portfolioCache.current?.signature === signature) return portfolioCache.current;
+    const next = {
+      signature,
+      snapshots: views.map((view) => view.snapshot),
+      seriesByAccountId: new Map(views.map((view) => [view.snapshot.account.id, view.series])),
+    };
+    portfolioCache.current = next;
+    return next;
+  }, [accounts, transactions, valuationLogs]);
+  const accountBalanceRows = useMemo(
+    () => overlayPortfolioValues(deriveAccountBalances(accounts, transactions), portfolioModel.snapshots),
+    [accounts, portfolioModel.snapshots, transactions],
+  );
+
+  useEffect(() => {
+    const active = accounts.filter((account) => !account.isArchived && isPortfolioAccount(account));
+    if (selectedPortfolioAccountId && active.some((account) => account.id === selectedPortfolioAccountId)) {
+      selectedPortfolioAccountIdRef.current = selectedPortfolioAccountId;
+      return;
+    }
+    commitPortfolioAccount(active[0]?.id ?? null);
+  }, [accounts, commitPortfolioAccount, selectedPortfolioAccountId]);
+
+  const shellValue = useMemo<ShellState>(
+    () => ({
+      hydrated,
+      view,
+      selectedMonth,
+      accountFilter,
+      dashboardTab,
+      selectedPortfolioAccountId,
+      settings,
+    }),
+    [accountFilter, dashboardTab, hydrated, selectedMonth, selectedPortfolioAccountId, settings, view],
+  );
+  const ledgerValue = useMemo<LedgerState>(
+    () => ({
+      categories,
+      accounts,
+      transactions,
+      budgets,
+      merchantMemory,
+      monthSummary,
+      categorySpend,
+      accountBalances: accountBalanceRows,
       categoryById,
       accountById,
     }),
     [
       accountBalanceRows,
       accountById,
-      accountFilter,
       accounts,
-      addTransactionFromQuickAdd,
-      addValuationLog,
-      archiveAccount,
-      unarchiveAccount,
-      deleteAccount,
       budgets,
       categories,
       categoryById,
       categorySpend,
-      createAccount,
-      dashboardTab,
-      deleteBudget,
-      deleteTransaction,
-      deleteValuationLog,
-      exportWorkbook,
-      focusQuickAdd,
-      importWorkbook,
-      hydrated,
       merchantMemory,
       monthSummary,
-      portfolioSnapshotRows,
-      previewQuickAdd,
-      selectedMonth,
-      selectedPortfolioAccountId,
-      settings,
       transactions,
-      undo,
-      updateAccount,
-      updateTransaction,
-      upsertBudget,
-      valuationLogs,
-      view,
     ],
   );
+  const portfolioValue = useMemo<PortfolioState>(
+    () => ({
+      valuationLogs,
+      portfolioSnapshots: portfolioModel.snapshots,
+      seriesByAccountId: portfolioModel.seriesByAccountId,
+    }),
+    [portfolioModel, valuationLogs],
+  );
 
-  return <FinanceContext.Provider value={value}>{children}</FinanceContext.Provider>;
+  return (
+    <ShellContext.Provider value={shellValue}>
+      <LedgerContext.Provider value={ledgerValue}>
+        <PortfolioContext.Provider value={portfolioValue}>
+          <ActionsContext.Provider value={actions}>{children}</ActionsContext.Provider>
+        </PortfolioContext.Provider>
+      </LedgerContext.Provider>
+    </ShellContext.Provider>
+  );
+}
+
+export function useShell(): ShellState {
+  return useContext(ShellContext) ?? missingProvider();
+}
+
+export function useLedger(): LedgerState {
+  return useContext(LedgerContext) ?? missingProvider();
+}
+
+export function usePortfolio(): PortfolioState {
+  return useContext(PortfolioContext) ?? missingProvider();
+}
+
+export function useFinanceActions(): FinanceActions {
+  return useContext(ActionsContext) ?? missingProvider();
 }
 
 export function useFinance(): FinanceContextValue {
-  const context = useContext(FinanceContext);
-  if (!context) {
-    throw new Error("useFinance must be used within FinanceProvider");
-  }
-  return context;
+  const shell = useContext(ShellContext);
+  const ledger = useContext(LedgerContext);
+  const portfolio = useContext(PortfolioContext);
+  const financeActions = useContext(ActionsContext);
+  if (!shell || !ledger || !portfolio || !financeActions) missingProvider();
+  return { ...shell, ...ledger, ...portfolio, ...financeActions };
 }

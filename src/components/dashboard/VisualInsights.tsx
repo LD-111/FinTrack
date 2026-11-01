@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Bar,
   BarChart,
@@ -13,33 +14,46 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useFinance } from "@/context/FinanceContext";
+import { useLedger, useShell } from "@/context/FinanceContext";
 import { dailySpend } from "@/lib/derived";
 import { formatMoney } from "@/lib/money";
 
 export function VisualInsights() {
-  const { categorySpend, transactions, settings } = useFinance();
+  const { categorySpend, transactions } = useLedger();
+  const { settings } = useShell();
 
-  const pieData = categorySpend
-    .filter((item) => item.spentCents > 0)
-    .map((item) => ({
-      name: item.category.name,
-      value: item.spentCents / 100,
-      color: item.category.color,
-    }));
+  const pieData = useMemo(
+    () =>
+      categorySpend
+        .filter((item) => item.spentCents > 0)
+        .map((item) => ({
+          name: item.category.name,
+          value: item.spentCents / 100,
+          color: item.category.color,
+        })),
+    [categorySpend],
+  );
 
-  const barData = categorySpend
-    .filter((item) => item.budgetCents !== null)
-    .map((item) => ({
-      name: item.category.name,
-      spent: Math.max(0, item.spentCents) / 100,
-      budget: (item.budgetCents ?? 0) / 100,
-    }));
+  const barData = useMemo(
+    () =>
+      categorySpend
+        .filter((item) => item.budgetCents !== null)
+        .map((item) => ({
+          name: item.category.name,
+          spent: Math.max(0, item.spentCents) / 100,
+          budget: (item.budgetCents ?? 0) / 100,
+        })),
+    [categorySpend],
+  );
 
-  const lineData = dailySpend(transactions).map((item) => ({
-    date: item.date.slice(5),
-    spent: item.cents / 100,
-  }));
+  const lineData = useMemo(
+    () =>
+      dailySpend(transactions).map((item) => ({
+        date: item.date.slice(5),
+        spent: item.cents / 100,
+      })),
+    [transactions],
+  );
 
   const moneyTick = (value: number) => formatMoney(Math.round(value * 100), settings.currency, settings.locale);
 

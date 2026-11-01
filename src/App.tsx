@@ -1,18 +1,22 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { SplashScreen } from "@/components/layout/SplashScreen";
-import { DashboardView } from "@/components/dashboard/DashboardView";
 import { BudgetView } from "@/components/budgets/BudgetView";
 import { QuickAddBar } from "@/components/transactions/QuickAddBar";
 import { TransactionTable } from "@/components/transactions/TransactionTable";
-import { useFinance } from "@/context/FinanceContext";
+import { useFinanceActions, useShell } from "@/context/FinanceContext";
+
+const DashboardView = lazy(() =>
+  import("@/components/dashboard/DashboardView").then((module) => ({ default: module.DashboardView })),
+);
 
 const SPLASH_HOLD_MS = 900;
 const SPLASH_EXIT_MS = 400;
 const splashStartedAt = performance.now();
 
 export default function App() {
-  const { hydrated, view, setView, undo, focusQuickAdd } = useFinance();
+  const { hydrated, view } = useShell();
+  const { setView, undo, focusQuickAdd } = useFinanceActions();
   const [splash, setSplash] = useState<"hold" | "exit" | "gone">("hold");
 
   useEffect(() => {
@@ -25,6 +29,7 @@ export default function App() {
         Boolean(target?.isContentEditable);
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        if (inField) return;
         event.preventDefault();
         void undo();
         return;
@@ -78,7 +83,15 @@ export default function App() {
             <Sidebar />
             <main className="flex min-w-0 flex-1 flex-col">
               <QuickAddBar />
-              {view === "dashboard" && <DashboardView />}
+              {view === "dashboard" && (
+                <Suspense
+                  fallback={
+                    <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Loading</div>
+                  }
+                >
+                  <DashboardView />
+                </Suspense>
+              )}
               {view === "transactions" && <TransactionTable />}
               {view === "budgets" && <BudgetView />}
             </main>
