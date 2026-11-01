@@ -14,6 +14,7 @@ import {
   matchAccountToken,
   matchArchivedAccountToken,
   planAccountDeletion,
+  suggestTransferDestination,
   uniqueAccountSlug,
 } from "@/lib/accounts";
 import { toast } from "@/lib/toast";
@@ -32,6 +33,7 @@ import { parseQuickAdd } from "@/lib/parser";
 import { overlayPortfolioValues, portfolioSnapshots as derivePortfolioSnapshots } from "@/lib/portfolio";
 import { downloadWorkbook, planWorkbookImport, summarizeImport, type ImportPlan } from "@/lib/excel";
 import { formatMoney } from "@/lib/money";
+import { toMerchantKey } from "@/lib/utils";
 import { DEFAULT_SETTINGS, seedIfEmpty } from "@/lib/seed";
 import type {
   Account,
@@ -229,35 +231,67 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
 
       if (parsed.kind === "transfer") {
         const from = parsed.accountToken ? matchAccountToken(parsed.accountToken, accounts) : undefined;
-        const to = parsed.toAccountToken ? matchAccountToken(parsed.toAccountToken, accounts) : undefined;
-        if (!from || !to) {
-          const archivedName =
-            (!from ? archivedNameFor(parsed.accountToken) : undefined) ??
-            (!to ? archivedNameFor(parsed.toAccountToken) : undefined);
+        if (!from) {
+          const archivedName = archivedNameFor(parsed.accountToken);
+          return {
+            raw,
+            valid: false,
+            reason: archivedName
+              ? `${archivedName} is archived`
+              : parsed.accountToken
+                ? "Unknown account"
+                : "Transfer needs #from and #to",
+          };
+        }
+
+        const explicitTo = parsed.toAccountToken
+          ? matchAccountToken(parsed.toAccountToken, accounts)
+          : undefined;
+        if (parsed.toAccountToken && !explicitTo) {
+          const archivedName = archivedNameFor(parsed.toAccountToken);
           return {
             raw,
             valid: false,
             reason: archivedName ? `${archivedName} is archived` : "Unknown account",
           };
         }
-        if (from.id === to.id) {
+        if (explicitTo && explicitTo.id === from.id) {
           return { raw, valid: false, reason: "Pick two different accounts" };
         }
 
-        const description = parsed.description || `${from.name} → ${to.name}`;
+        const suggestion = explicitTo
+          ? undefined
+          : suggestTransferDestination(from.id, parsed.amountCents, transactions, accounts);
+        const to = explicitTo ?? (suggestion ? accountById(suggestion.toAccountId) : undefined);
+        if (!to || to.id === from.id) {
+          return {
+            raw,
+            valid: false,
+            reason: "Pick #to",
+            amountCents: parsed.amountCents,
+            kind: "transfer",
+            accountId: from.id,
+            accountName: from.name,
+            date: parsed.date,
+          };
+        }
+
+        const description =
+          parsed.description || suggestion?.description || `${from.name} → ${to.name}`;
         return {
           raw,
           valid: true,
           amountCents: parsed.amountCents,
           kind: "transfer",
           description,
-          merchantKey: parsed.merchantKey,
+          merchantKey: parsed.description ? parsed.merchantKey : toMerchantKey(description),
           categoryId: TRANSFER_CATEGORY_ID,
           categoryName: "Transfer",
           accountId: from.id,
           accountName: from.name,
           toAccountId: to.id,
           toAccountName: to.name,
+          toAccountSource: explicitTo ? "explicit" : "memory",
           date: parsed.date,
         };
       }
@@ -299,7 +333,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         date: parsed.date,
       };
     },
-    [accountById, accounts, categories, categoryById, merchantMemory, settings.defaultAccountId],
+    [accountById, accounts, categories, categoryById, merchantMemory, settings.defaultAccountId, transactions],
   );
 
   const rememberMerchant = useCallback(

@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { useFinance } from "@/context/FinanceContext";
 import { addDays, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney } from "@/lib/money";
-import { cn } from "@/lib/utils";
+import { cn, toMerchantKey } from "@/lib/utils";
 
 type Chip = "category" | "account" | "date";
 
@@ -24,6 +24,7 @@ export function QuickAddBar() {
   const [activeChip, setActiveChip] = useState<Chip | null>(null);
   const [categoryOverride, setCategoryOverride] = useState<string | null>(null);
   const [accountOverride, setAccountOverride] = useState<string | null>(null);
+  const [toAccountOverride, setToAccountOverride] = useState<string | null>(null);
   const [dateOverride, setDateOverride] = useState<string | null>(null);
 
   const preview = useMemo(() => previewQuickAdd(value), [previewQuickAdd, value]);
@@ -33,20 +34,36 @@ export function QuickAddBar() {
   const date = dateOverride ?? preview.date;
   const category = categoryId ? categoryById(categoryId) : undefined;
   const account = accountId ? accountById(accountId) : undefined;
+  const toAccountId = toAccountOverride ?? preview.toAccountId;
+  const toAccount = toAccountId ? accountById(toAccountId) : undefined;
   const usableCategories = categories.filter((item) => !item.isArchived);
   const usableAccounts = accounts.filter((item) => !item.isArchived);
+  const destinationChanged = Boolean(toAccountOverride && toAccountOverride !== preview.toAccountId);
+  const fromLabel = preview.accountName ?? account?.name ?? "Account";
+  const previousGenerated = preview.toAccountName ? `${fromLabel} → ${preview.toAccountName}` : undefined;
+  const descriptionLabel =
+    destinationChanged && toAccount
+      ? !preview.description ||
+        preview.description === previousGenerated ||
+        preview.toAccountSource === "memory"
+        ? `${fromLabel} → ${toAccount.name}`
+        : preview.description
+      : preview.description;
 
   useEffect(() => {
     setCategoryOverride(null);
     setAccountOverride(null);
+    setToAccountOverride(null);
     setDateOverride(null);
     setActiveChip(null);
   }, [value]);
 
   function commit(raw = value) {
+    const toSlug = destinationChanged ? accountById(toAccountOverride ?? "")?.slug : undefined;
     const suffix = [
       !isTransfer && categoryOverride ? `@${categoryById(categoryOverride)?.name ?? ""}` : "",
       !isTransfer && accountOverride ? `#${accountById(accountOverride)?.slug ?? ""}` : "",
+      isTransfer && toSlug && preview.toAccountSource !== "explicit" ? `-> #${toSlug}` : "",
       dateOverride && dateOverride !== preview.date ? dateOverride : "",
     ]
       .filter(Boolean)
@@ -58,8 +75,24 @@ export function QuickAddBar() {
     if (!isTransfer && categoryOverride && result.transaction.categoryId !== categoryOverride) {
       void updateTransaction(result.transaction.id, { categoryId: categoryOverride });
     }
-    if (accountOverride && result.transaction.accountId !== accountOverride) {
+    if (!isTransfer && accountOverride && result.transaction.accountId !== accountOverride) {
       void updateTransaction(result.transaction.id, { accountId: accountOverride });
+    }
+    if (
+      isTransfer &&
+      destinationChanged &&
+      toAccountOverride &&
+      preview.toAccountSource === "explicit" &&
+      result.transaction.toAccountId !== toAccountOverride
+    ) {
+      const nextToName = accountById(toAccountOverride)?.name ?? "Account";
+      const description = `${fromLabel} → ${nextToName}`;
+      void updateTransaction(result.transaction.id, {
+        toAccountId: toAccountOverride,
+        ...(result.transaction.description === previousGenerated
+          ? { description, merchantKey: toMerchantKey(description) }
+          : {}),
+      });
     }
     if (dateOverride && result.transaction.date !== dateOverride) {
       void updateTransaction(result.transaction.id, { date: dateOverride });
@@ -68,6 +101,7 @@ export function QuickAddBar() {
     setValue("");
     setCategoryOverride(null);
     setAccountOverride(null);
+    setToAccountOverride(null);
     setDateOverride(null);
     setActiveChip(null);
     requestAnimationFrame(() => quickAddRef.current?.focus());
@@ -83,6 +117,19 @@ export function QuickAddBar() {
     const currentIndex = usableAccounts.findIndex((item) => item.id === accountId);
     const nextIndex = (currentIndex + direction + usableAccounts.length) % usableAccounts.length;
     setAccountOverride(usableAccounts[nextIndex]?.id ?? null);
+  }
+
+  function cycleDestination(direction: 1 | -1) {
+    const choices = usableAccounts.filter((item) => item.id !== accountId);
+    if (choices.length === 0) return;
+    const currentIndex = choices.findIndex((item) => item.id === toAccountId);
+    const nextIndex =
+      currentIndex === -1
+        ? direction === 1
+          ? 0
+          : choices.length - 1
+        : (currentIndex + direction + choices.length) % choices.length;
+    setToAccountOverride(choices[nextIndex]?.id ?? null);
   }
 
   function nextChip(current: Chip | null, direction: 1 | -1): Chip | null {
@@ -119,7 +166,8 @@ export function QuickAddBar() {
       }
       if (activeChip === "account") {
         event.preventDefault();
-        cycleAccount(direction);
+        if (isTransfer) cycleDestination(direction);
+        else cycleAccount(direction);
       }
       if (activeChip === "date" && date) {
         event.preventDefault();
@@ -155,18 +203,18 @@ export function QuickAddBar() {
       <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2 text-xs">
         {!value && (
           <p className="text-muted-foreground">
-            Type an amount and a name. Use #account or 500 #cash -&gt; #savings. Tab edits chips.
+            Type an amount and a name, or 500 #cash to start a transfer. Tab edits chips.
           </p>
         )}
-        {value && !preview.valid && (
+        {value && !preview.valid && !(isTransfer && toAccountOverride) && (
           <p className="text-destructive">{preview.reason}</p>
         )}
-        {value && preview.valid && preview.amountCents && preview.kind && date && (
+        {value && preview.amountCents && preview.kind && date && (preview.valid || (isTransfer && preview.accountId)) && (
           <>
             <Badge className={amountTone}>
               {formatSignedMoney(preview.amountCents, preview.kind, settings.currency, settings.locale)}
             </Badge>
-            <Badge>{preview.description}</Badge>
+            {descriptionLabel && <Badge>{descriptionLabel}</Badge>}
             {!isTransfer && (
               <Badge
                 className={cn(
@@ -179,10 +227,14 @@ export function QuickAddBar() {
                 {category?.name ?? "Uncategorized"}
               </Badge>
             )}
-            <Badge className={cn("cursor-default", activeChip === "account" && "ring-2 ring-ring")}>
-              {isTransfer
-                ? `${preview.accountName ?? account?.name ?? "Account"} → ${preview.toAccountName ?? "Account"}`
-                : (account?.name ?? preview.accountName ?? "Account")}
+            <Badge
+              className={cn(
+                "cursor-default",
+                isTransfer && preview.toAccountSource === "memory" && !toAccountOverride && "opacity-70",
+                activeChip === "account" && "ring-2 ring-ring",
+              )}
+            >
+              {isTransfer ? `${fromLabel} → ${toAccount?.name ?? "…"}` : (account?.name ?? preview.accountName ?? "Account")}
             </Badge>
             <Badge className={cn(activeChip === "date" && "ring-2 ring-ring")}>
               {formatDisplayDate(date, settings.locale)}

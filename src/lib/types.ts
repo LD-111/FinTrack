@@ -114,6 +114,7 @@ export interface QuickAddPreview {
   accountName?: string;
   toAccountId?: string;
   toAccountName?: string;
+  toAccountSource?: "explicit" | "memory";
   date?: string;
 }
 

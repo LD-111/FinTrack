@@ -166,6 +166,44 @@ export function planAccountDeletion(
   };
 }
 
+export interface TransferDestinationSuggestion {
+  toAccountId: string;
+  description?: string;
+}
+
+export function suggestTransferDestination(
+  fromAccountId: string,
+  amountCents: number,
+  transactions: Transaction[],
+  accounts: Account[],
+): TransferDestinationSuggestion | undefined {
+  const activeIds = new Set(
+    accounts.filter((account) => !account.isArchived).map((account) => account.id),
+  );
+  const outgoing = transactions.filter(
+    (transaction) =>
+      transaction.kind === "transfer" &&
+      transaction.accountId === fromAccountId &&
+      transaction.toAccountId &&
+      transaction.toAccountId !== fromAccountId &&
+      activeIds.has(transaction.toAccountId),
+  );
+  const recent = [...outgoing].sort((a, b) => {
+    const byDate = b.date.localeCompare(a.date);
+    if (byDate !== 0) return byDate;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+  const chosen = recent.find((transaction) => transaction.amountCents === amountCents) ?? recent[0];
+  if (chosen?.toAccountId) {
+    const description = chosen.description.trim();
+    return { toAccountId: chosen.toAccountId, description: description || undefined };
+  }
+
+  const others = accounts.filter((account) => !account.isArchived && account.id !== fromAccountId);
+  if (others.length === 1) return { toAccountId: others[0].id };
+  return undefined;
+}
+
 export function formatAccountLabel(
   transaction: Transaction,
   accountById: (id: string) => Account | undefined,

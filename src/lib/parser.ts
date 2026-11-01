@@ -77,7 +77,7 @@ function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
   cursor += 1;
 
   let categoryToken: string | undefined;
-  let accountToken: string | undefined;
+  const accountTokens: string[] = [];
   let date = today;
   const descriptionParts: string[] = [];
 
@@ -88,10 +88,7 @@ function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
       continue;
     }
     if (token.startsWith("#") && token.length > 1) {
-      if (accountToken) {
-        return { ok: false, reason: "Use -> to transfer between accounts" };
-      }
-      accountToken = token.slice(1);
+      accountTokens.push(token.slice(1));
       continue;
     }
 
@@ -115,6 +112,32 @@ function parseIncomeExpense(tokens: string[], today: string): ParsedQuickAdd {
   }
 
   const description = descriptionParts.join(" ").trim();
+  const [accountToken, toAccountToken, extraAccountToken] = accountTokens;
+  const shorthandTransfer =
+    kind === "expense" && !description && !categoryToken && accountTokens.length > 0;
+
+  if (shorthandTransfer) {
+    if (extraAccountToken) {
+      return { ok: false, reason: "Transfer needs two accounts" };
+    }
+    if (toAccountToken && accountToken.toLowerCase() === toAccountToken.toLowerCase()) {
+      return { ok: false, reason: "Pick two different accounts" };
+    }
+    return {
+      ok: true,
+      amountCents,
+      kind: "transfer",
+      description: "",
+      merchantKey: "",
+      accountToken,
+      toAccountToken,
+      date,
+    };
+  }
+
+  if (accountTokens.length >= 2) {
+    return { ok: false, reason: "Use -> to transfer between accounts" };
+  }
   if (!description) {
     return { ok: false, reason: "Add a description" };
   }
@@ -191,10 +214,10 @@ function parseTransfer(tokens: string[], today: string, skipKeyword: boolean): P
     descriptionParts.push(token);
   }
 
-  if (!accountToken || !toAccountToken) {
+  if (!accountToken) {
     return { ok: false, reason: "Transfer needs #from and #to" };
   }
-  if (accountToken.toLowerCase() === toAccountToken.toLowerCase()) {
+  if (toAccountToken && accountToken.toLowerCase() === toAccountToken.toLowerCase()) {
     return { ok: false, reason: "Pick two different accounts" };
   }
 

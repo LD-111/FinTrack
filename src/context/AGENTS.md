@@ -8,7 +8,7 @@
 - `addTransactionFromQuickAdd` parses + categorizes + resolves `#account` + writes + merchant memory. Transfers skip merchant memory. Return `{ ok, reason }` — do not throw parse errors.
 - Last successful account becomes `settings.defaultAccountId`.
 - Account CRUD: `createAccount`, `updateAccount`, `archiveAccount`, `unarchiveAccount`, `deleteAccount`. Archive and delete refuse the last active account. Delete removes the account, its income and expenses, transfers that touch it, and its valuation logs, then reassigns the default account when that account was the default. One undo entry restores the account, those rows, and the previous default account.
-- Quick Add does not unarchive. If a `#token` misses every active account and matches exactly one archived account, the preview reason is `{name} is archived`.
+- Quick Add does not unarchive. If a `#token` misses every active account and matches exactly one archived account, the preview reason is `{name} is archived`. A transfer with only `#from` suggests a destination and stays incomplete (`Pick #to`, Enter does nothing) when nothing matches. A typed destination that misses is `Unknown account` or `{name} is archived` and is not replaced with a guess.
 - `accountFilter` is shared so the sidebar can open Ledger on one account.
 - `dashboardTab` (`cashflow` | `portfolio`) and `selectedPortfolioAccountId` stay in context so the sidebar can open the Portfolio tab on a portfolio account.
 - Valuation logs: `addValuationLog`, `deleteValuationLog`. Optimistic write, then Dexie. UI never imports `db`.
