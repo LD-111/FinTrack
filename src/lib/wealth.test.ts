@@ -275,6 +275,87 @@ describe("wealthSnapshot", () => {
     expect(snapshot.negative).toEqual([{ accountId: "checking", name: "Checking", balanceCents: -4_000 }]);
   });
 
+  it("keeps a line of credit in the signed total and history, and out of the pie", () => {
+    const checking = makeAccount({
+      id: "checking",
+      name: "Checking",
+      type: "bank",
+      openingBalanceCents: 1_000,
+      createdAt: OPEN,
+      updatedAt: OPEN,
+    });
+    const savings = makeAccount({
+      id: "savings",
+      name: "Savings",
+      type: "savings",
+      openingBalanceCents: 10_000,
+      createdAt: OPEN,
+      updatedAt: OPEN,
+    });
+    const draw = makeTransaction({
+      id: "draw",
+      kind: "expense",
+      amountCents: 15_000,
+      accountId: checking.id,
+      description: "Line of credit",
+      date: "2026-03-10",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+    });
+    const accounts = [checking, savings];
+    const transactions = [draw];
+    const snapshot = wealthSnapshot(accounts, transactions, new Map());
+    const series = wealthSeries(accounts, transactions, new Map(), { today: TODAY });
+
+    expect(snapshot.totalCents).toBe(-4_000);
+    expect(snapshot.cashCents).toBe(-4_000);
+    expect(snapshot.investedCents).toBe(0);
+    expect(snapshot.totalCents).toBe(cardTotal(accounts, transactions, [], false));
+    expect(snapshot.slices).toEqual([{ accountId: "savings", name: "Savings", balanceCents: 10_000 }]);
+    expect(snapshot.negative).toEqual([{ accountId: "checking", name: "Checking", balanceCents: -14_000 }]);
+    expect(series.find((point) => point.month === "2026-02")?.totalCents).toBe(11_000);
+    expect(series.find((point) => point.month === "2026-03")?.totalCents).toBe(-4_000);
+    expect(series.find((point) => point.month === "2026-04")?.totalCents).toBe(-4_000);
+    expect(wealthChangeCents(series, "2026-03")).toBe(-15_000);
+    expect(wealthChangeCents(series, "2026-04")).toBe(0);
+  });
+
+  it("keeps a negative portfolio value in invested and out of the pie", () => {
+    const brokerage = makeAccount({
+      id: "broker",
+      name: "Brokerage",
+      type: "investment",
+      openingBalanceCents: 2_000,
+      createdAt: OPEN,
+      updatedAt: OPEN,
+    });
+    const cash = makeAccount({
+      id: "cash",
+      name: "Cash",
+      type: "cash",
+      openingBalanceCents: 1_000,
+      createdAt: OPEN,
+      updatedAt: OPEN,
+    });
+    const log = makeValuation({
+      id: "val",
+      accountId: brokerage.id,
+      valueCents: -500,
+      date: "2026-03-01",
+      createdAt: "2026-03-01T00:00:00.000Z",
+    });
+    const accounts = [cash, brokerage];
+    const logs = [log];
+    const snapshot = wealthSnapshot(accounts, [], seriesFor(accounts, [], logs));
+
+    expect(snapshot.cashCents).toBe(1_000);
+    expect(snapshot.investedCents).toBe(-500);
+    expect(snapshot.totalCents).toBe(500);
+    expect(snapshot.totalCents).toBe(cardTotal(accounts, [], logs, false));
+    expect(snapshot.slices).toEqual([{ accountId: "cash", name: "Cash", balanceCents: 1_000 }]);
+    expect(snapshot.negative).toEqual([{ accountId: "broker", name: "Brokerage", balanceCents: -500 }]);
+  });
+
   it("ends the series on today at the live total", () => {
     const checking = makeAccount({
       id: "checking",

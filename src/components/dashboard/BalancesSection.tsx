@@ -16,7 +16,7 @@ import { useLedger, usePortfolio, useShell } from "@/context/FinanceContext";
 import { formatMonthLabel } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import { wealthChangeCents, wealthSeries, wealthSnapshot, type WealthSlice } from "@/lib/wealth";
+import { wealthChangeCents, wealthSeries, wealthSnapshot } from "@/lib/wealth";
 
 function formatShare(cents: number, totalCents: number, locale: string): string {
   if (totalCents <= 0) return "0%";
@@ -141,22 +141,32 @@ export function BalancesSection() {
               )}
             </div>
             {pieData.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs text-muted-foreground">Share of positive balances</p>
+                <ul className="space-y-1">
+                  {pieData.map((slice) => (
+                    <li key={slice.id} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="size-2 shrink-0 rounded-full" style={{ background: slice.color }} />
+                        <span className="truncate">{slice.name}</span>
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatShare(slice.cents, pieCents, settings.locale)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {snapshot.negative.length > 0 && (
               <ul className="mt-3 space-y-1">
-                {pieData.map((slice) => (
-                  <li key={slice.id} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="size-2 shrink-0 rounded-full" style={{ background: slice.color }} />
-                      <span className="truncate">{slice.name}</span>
-                    </span>
-                    <span className="tabular-nums text-muted-foreground">
-                      {formatShare(slice.cents, pieCents, settings.locale)}
-                    </span>
+                {snapshot.negative.map((row) => (
+                  <li key={row.accountId} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate">{row.name}</span>
+                    <span className="tabular-nums text-expense">{money(row.balanceCents)}</span>
                   </li>
                 ))}
               </ul>
-            )}
-            {snapshot.negative.length > 0 && (
-              <p className="mt-3 text-sm text-muted-foreground">{negativeNote(snapshot.negative)}</p>
             )}
           </CardContent>
         </Card>
@@ -212,14 +222,6 @@ function shortMonth(yearMonth: string, locale: string, withYear: boolean): strin
     month: "short",
     year: withYear ? "2-digit" : undefined,
   });
-}
-
-function negativeNote(rows: WealthSlice[]): string {
-  const names = rows.map((row) => row.name);
-  if (names.length === 1) return `${names[0]} is negative and left out of the chart.`;
-  if (names.length === 2) return `${names[0]} and ${names[1]} are negative and left out of the chart.`;
-  const last = names[names.length - 1];
-  return `${names.slice(0, -1).join(", ")}, and ${last} are negative and left out of the chart.`;
 }
 
 function EmptyChart({ label }: { label: string }) {
