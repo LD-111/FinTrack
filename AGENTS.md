@@ -10,6 +10,7 @@ Local-first desktop personal finance app. Absolute simplicity: faster and easier
 - Dexie (IndexedDB) for persistence
 - Recharts for insights
 - SheetJS (`xlsx`) for the ledger workbook
+- Vitest for `npm test`
 - npm
 
 ## Architecture
@@ -33,7 +34,11 @@ Portfolio current value = latest valuation log + transfers after that log. Princ
 
 ## Testing
 
-There is no automated suite. Exercise the UI at http://localhost:1420. Vite will not start if 1420 is already taken — reuse that server instead of launching a second one.
+`npm test` runs the Vitest suite once. `npm run test:watch` reruns it while files change. Tests sit next to the modules they cover (`src/lib/*.test.ts`) plus `src/context/FinanceContext.test.tsx`. Shared row builders live in `src/test/fixtures.ts` and are not imported by the app.
+
+The suite covers Quick Add parsing, refunds, transfers, balances, account matching and deletion plans, portfolio value and time-weighted return, and workbook import. The provider file creates accounts, commits Quick Add, logs valuations, archives and deletes, and undoes a transaction against `fake-indexeddb`. That database is in memory. It does not touch the Vite tab’s IndexedDB.
+
+Keyboard behavior in the running UI stays manual. Exercise the app at http://localhost:1420. Vite will not start if 1420 is already taken — reuse that server instead of launching a second one.
 
 IndexedDB database name is `fintrack`. It persists per browser profile (Vite tab, another Chrome profile, and the Tauri WebView are different databases). Leftover verification rows are normal: empty income, a negative Cash balance, or a "Verification Lunch" in Recent. `seedIfEmpty()` only runs when `categories` is empty, so a second visit never resets data. To start clean, delete the `fintrack` database and reload so Dexie and seed run again.
 
