@@ -79,6 +79,12 @@
     @apply bg-background text-foreground font-sans antialiased;
     overflow: hidden;
   }
+
+  /* Native menus use a light popup. Options must not inherit a light sidebar color. */
+  select option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
 }
 
 @keyframes splash-mark-in {

@@ -195,7 +195,8 @@ export function Sidebar() {
             )}
             <select
               value={type}
-              className="h-8 w-full rounded-md border border-input bg-background/10 px-2 text-xs"
+              aria-label="Account type"
+              className="h-8 w-full rounded-md border border-input bg-background/10 px-2 text-xs text-sidebar-foreground"
               onChange={(event) => setType(event.target.value as AccountType)}
             >
               {ACCOUNT_TYPES.map((item) => (
