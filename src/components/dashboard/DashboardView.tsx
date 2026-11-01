@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { BalancesSection } from "@/components/dashboard/BalancesSection";
 import { PortfolioPanel } from "@/components/dashboard/PortfolioPanel";
 import { VisualInsights } from "@/components/dashboard/VisualInsights";
 import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
@@ -196,6 +197,8 @@ function CashflowBody() {
           </CardContent>
         </Card>
       </div>
+
+      <BalancesSection />
     </>
   );
 }

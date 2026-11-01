@@ -17,7 +17,7 @@ Local-first desktop personal finance app. Absolute simplicity: faster and easier
 
 The packaged app is a static Vite `dist/` folder inside Tauri. All data lives in the WebView via IndexedDB. `FinanceContext` is the only persistence gateway. UI never imports `db` directly.
 
-Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a URL router. Dashboard has a Cashflow | Portfolio tab (`dashboardTab` in context).
+Navigation is React view state (`dashboard` | `transactions` | `budgets`), not a URL router. Dashboard has a Cashflow | Portfolio tab (`dashboardTab` in context). Cashflow ends with Balances, below Accounts, Budgets, and Recent: liquid accounts (bank, cash, savings) plus portfolio market value, an account pie, and month-end history. The liquid stat is labeled Liquid, so it does not collide with an account named Cash. That total is not monthly Net. Only its change stat follows `selectedMonth`.
 
 Money is integer cents (`amountCents`, `openingBalanceCents`, `valueCents`). Account balances and portfolio metrics are derived, never stored. Transaction `date` and valuation `date` are local `YYYY-MM-DD`. Timestamps are ISO UTC.
 
@@ -36,7 +36,7 @@ Portfolio current value = latest valuation log, plus later transfers, income, an
 
 `npm test` runs the Vitest suite once. `npm run test:watch` reruns it while files change. Tests sit next to the modules they cover (`src/lib/*.test.ts`) plus `src/context/FinanceContext.test.tsx`. Shared row builders live in `src/test/fixtures.ts` and are not imported by the app.
 
-The suite covers Quick Add parsing, refunds, transfers, balances, account matching and deletion plans, portfolio value and time-weighted return, and workbook import. The provider file creates accounts, commits Quick Add, logs valuations, archives and deletes, and undoes a transaction against `fake-indexeddb`. That database is in memory. It does not touch the Vite tab’s IndexedDB.
+The suite covers Quick Add parsing, refunds, transfers, balances, account matching and deletion plans, portfolio value and time-weighted return, the balances total and month-end series, and workbook import. The provider file creates accounts, commits Quick Add, logs valuations, archives and deletes, and undoes a transaction against `fake-indexeddb`. That database is in memory. It does not touch the Vite tab’s IndexedDB.
 
 Keyboard behavior in the running UI stays manual. Exercise the app at http://localhost:1420. Vite will not start if 1420 is already taken — reuse that server instead of launching a second one.
 
@@ -46,7 +46,7 @@ Do not create the Dexie schema yourself. Opening `indexedDB.open("fintrack", 3)`
 
 Launch shows a splash (logo and “FinTrack” on the sidebar color) until hydrate and a short minimum (~1s), then fades into the shell. Quick Add is focused underneath, so it is ready when the dashboard appears. `prefers-reduced-motion` skips the animation and dismisses as soon as hydrate finishes.
 
-To load fixture data: wait until the splash has faded and the sidebar is visible, write into the existing stores, then reload so `FinanceContext` rehydrates. Leave `categories` alone unless you are replacing known seed ids (`cat_food`, `cat_salary`, `cat_transfer`, `cat_uncategorized`, …). Clear leftover `accounts` / `transactions` / `budgets` / `valuationLogs` if you need a clean month. Dashboard and Ledger filter by `selectedMonth` (the current `YYYY-MM`); fixture `date` values outside that month do not appear in totals or the default list. Transfers need `kind: "transfer"`, `toAccountId`, and `categoryId: "cat_transfer"`.
+To load fixture data: wait until the splash has faded and the sidebar is visible, write into the existing stores, then reload so `FinanceContext` rehydrates. Leave `categories` alone unless you are replacing known seed ids (`cat_food`, `cat_salary`, `cat_transfer`, `cat_uncategorized`, …). Clear leftover `accounts` / `transactions` / `budgets` / `valuationLogs` if you need a clean month. Dashboard and Ledger filter by `selectedMonth` (the current `YYYY-MM`); fixture `date` values outside that month do not appear in totals or the default list. Balances on Cashflow does not: its total, pie, and history include the whole timeline, and only the change stat follows `selectedMonth`. Scroll the pane to see it. Transfers need `kind: "transfer"`, `toAccountId`, and `categoryId: "cat_transfer"`.
 
 There are no URL routes. You cannot open `/ledger`. Click the sidebar, or press `1` / `2` / `3` only after Quick Add is not focused — it is focused on launch, so Escape (or click away) first. `/` and Ctrl+K put focus back on the bar. Setting an input's DOM `value` does not update React state: Quick Add will show the text but no preview chips unless keystrokes go through `onChange` (or you call context).
 
