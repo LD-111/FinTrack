@@ -23,6 +23,8 @@ export function summarizeMonth(transactions: Transaction[], yearMonth: string): 
       if (transaction.kind === "transfer") return summary;
       if (transaction.kind === "income") {
         summary.incomeCents += transaction.amountCents;
+      } else if (transaction.kind === "refund") {
+        summary.expenseCents -= transaction.amountCents;
       } else {
         summary.expenseCents += transaction.amountCents;
       }
@@ -47,11 +49,9 @@ export function categorySpendForMonth(
 ): CategorySpend[] {
   const spentByCategory = new Map<string, number>();
   for (const transaction of filterByMonth(transactions, yearMonth)) {
-    if (transaction.kind !== "expense") continue;
-    spentByCategory.set(
-      transaction.categoryId,
-      (spentByCategory.get(transaction.categoryId) ?? 0) + transaction.amountCents,
-    );
+    if (transaction.kind !== "expense" && transaction.kind !== "refund") continue;
+    const delta = transaction.kind === "refund" ? -transaction.amountCents : transaction.amountCents;
+    spentByCategory.set(transaction.categoryId, (spentByCategory.get(transaction.categoryId) ?? 0) + delta);
   }
 
   return categories
@@ -71,10 +71,11 @@ export function dailySpend(transactions: Transaction[], days = 30): { date: stri
   }
 
   for (const transaction of transactions) {
-    if (transaction.kind !== "expense") continue;
+    if (transaction.kind !== "expense" && transaction.kind !== "refund") continue;
     if (transaction.date < start) continue;
     if (!totals.has(transaction.date)) continue;
-    totals.set(transaction.date, (totals.get(transaction.date) ?? 0) + transaction.amountCents);
+    const delta = transaction.kind === "refund" ? -transaction.amountCents : transaction.amountCents;
+    totals.set(transaction.date, (totals.get(transaction.date) ?? 0) + delta);
   }
 
   return [...totals.entries()].map(([date, cents]) => ({ date, cents }));
@@ -84,7 +85,7 @@ export function accountBalances(accounts: Account[], transactions: Transaction[]
   const totals = new Map(accounts.map((account) => [account.id, account.openingBalanceCents]));
 
   for (const transaction of transactions) {
-    if (transaction.kind === "income") {
+    if (transaction.kind === "income" || transaction.kind === "refund") {
       totals.set(transaction.accountId, (totals.get(transaction.accountId) ?? 0) + transaction.amountCents);
       continue;
     }

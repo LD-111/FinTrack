@@ -32,7 +32,7 @@ export function VisualInsights() {
     .filter((item) => item.budgetCents !== null)
     .map((item) => ({
       name: item.category.name,
-      spent: item.spentCents / 100,
+      spent: Math.max(0, item.spentCents) / 100,
       budget: (item.budgetCents ?? 0) / 100,
     }));
 

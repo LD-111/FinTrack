@@ -30,7 +30,7 @@ export function BudgetView() {
       <div className="grid gap-3 md:grid-cols-2">
         {rows.map((item) => {
           const budget = item.budgetCents ?? 0;
-          const ratio = budget === 0 ? 0 : (item.spentCents / budget) * 100;
+          const ratio = budget <= 0 || item.spentCents <= 0 ? 0 : (item.spentCents / budget) * 100;
           return (
             <Card key={item.category.id}>
               <CardHeader className="flex-row items-center justify-between">

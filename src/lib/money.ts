@@ -37,7 +37,7 @@ export function formatMoney(
 
 export function formatSignedMoney(
   cents: number,
-  kind: "expense" | "income" | "transfer",
+  kind: "expense" | "income" | "transfer" | "refund",
   currency: string,
   locale: string,
 ): string {

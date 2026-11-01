@@ -18,7 +18,7 @@ import {
   uniqueAccountSlug,
 } from "@/lib/accounts";
 import { toast } from "@/lib/toast";
-import { resolveCategory } from "@/lib/categorizer";
+import { isSpendingCategory, kindAfterCategoryChange, kindForMoneyIn, resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth, todayISO } from "@/lib/dates";
 import { db } from "@/lib/db";
 import {
@@ -160,10 +160,23 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
           db.valuationLogs.toArray(),
         ]);
 
+      const categoriesById = new Map(nextCategories.map((category) => [category.id, category]));
+      const stamp = nowIso();
+      const migratedTransactions = nextTransactions.map((transaction) => {
+        if (transaction.kind !== "income" || !isSpendingCategory(categoriesById.get(transaction.categoryId))) {
+          return transaction;
+        }
+        return { ...transaction, kind: "refund" as const, updatedAt: stamp };
+      });
+      const rewritten = migratedTransactions.filter((transaction, index) => transaction !== nextTransactions[index]);
+      if (rewritten.length > 0) {
+        await db.transactions.bulkPut(rewritten);
+      }
+
       if (cancelled) return;
       setCategories(nextCategories);
       setAccounts(nextAccounts);
-      setTransactions(nextTransactions);
+      setTransactions(migratedTransactions);
       setBudgets(nextBudgets);
       setMerchantMemory(nextMemory);
       setValuationLogs(nextLogs);
@@ -317,16 +330,18 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         categories,
         merchantMemory,
       });
+      const resolvedCategory = categoryById(resolved.categoryId);
+      const kind = parsed.kind === "income" ? kindForMoneyIn(resolvedCategory) : parsed.kind;
 
       return {
         raw,
         valid: true,
         amountCents: parsed.amountCents,
-        kind: parsed.kind,
+        kind,
         description: parsed.description,
         merchantKey: parsed.merchantKey,
         categoryId: resolved.categoryId,
-        categoryName: categoryById(resolved.categoryId)?.name ?? "Uncategorized",
+        categoryName: resolvedCategory?.name ?? "Uncategorized",
         categorySource: resolved.source,
         accountId: account.id,
         accountName: account.name,
@@ -444,6 +459,9 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         ...patch,
         updatedAt: nowIso(),
       };
+      if (patch.categoryId && previous.kind !== "transfer") {
+        next.kind = kindAfterCategoryChange(previous.kind, categoryById(patch.categoryId));
+      }
       setTransactions((current) => current.map((transaction) => (transaction.id === id ? next : transaction)));
       await db.transactions.put(next);
       pushUndo({ type: "update-tx", previous });
@@ -452,7 +470,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         await rememberMerchant(next.merchantKey, next.categoryId);
       }
     },
-    [pushUndo, rememberMerchant, transactions],
+    [categoryById, pushUndo, rememberMerchant, transactions],
   );
 
   const deleteTransaction = useCallback(

@@ -1,5 +1,5 @@
 export type CategoryKind = "expense" | "income";
-export type TransactionKind = "expense" | "income" | "transfer";
+export type TransactionKind = "expense" | "income" | "transfer" | "refund";
 export type AccountType = "bank" | "cash" | "savings" | "investment" | "crypto" | "stock";
 export type BudgetPeriod = "monthly";
 export type AppView = "dashboard" | "transactions" | "budgets";

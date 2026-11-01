@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useFinance } from "@/context/FinanceContext";
+import { kindForMoneyIn } from "@/lib/categorizer";
 import { addDays, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney } from "@/lib/money";
 import { cn, toMerchantKey } from "@/lib/utils";
@@ -33,6 +34,8 @@ export function QuickAddBar() {
   const accountId = accountOverride ?? preview.accountId;
   const date = dateOverride ?? preview.date;
   const category = categoryId ? categoryById(categoryId) : undefined;
+  const displayKind =
+    preview.kind === "income" || preview.kind === "refund" ? kindForMoneyIn(category) : preview.kind;
   const account = accountId ? accountById(accountId) : undefined;
   const toAccountId = toAccountOverride ?? preview.toAccountId;
   const toAccount = toAccountId ? accountById(toAccountId) : undefined;
@@ -177,9 +180,9 @@ export function QuickAddBar() {
   }
 
   const amountTone =
-    preview.kind === "expense"
+    displayKind === "expense"
       ? "border-expense/30 text-expense"
-      : preview.kind === "income"
+      : displayKind === "income" || displayKind === "refund"
         ? "border-income/30 text-income"
         : "text-muted-foreground";
 
@@ -212,7 +215,7 @@ export function QuickAddBar() {
         {value && preview.amountCents && preview.kind && date && (preview.valid || (isTransfer && preview.accountId)) && (
           <>
             <Badge className={amountTone}>
-              {formatSignedMoney(preview.amountCents, preview.kind, settings.currency, settings.locale)}
+              {formatSignedMoney(preview.amountCents, displayKind ?? preview.kind, settings.currency, settings.locale)}
             </Badge>
             {descriptionLabel && <Badge>{descriptionLabel}</Badge>}
             {!isTransfer && (
@@ -227,6 +230,7 @@ export function QuickAddBar() {
                 {category?.name ?? "Uncategorized"}
               </Badge>
             )}
+            {displayKind === "refund" && <Badge className="border-income/30 text-income">Refund</Badge>}
             <Badge
               className={cn(
                 "cursor-default",

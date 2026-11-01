@@ -186,7 +186,7 @@ function CashflowBody() {
                       className={
                         transaction.kind === "expense"
                           ? "tabular-nums text-expense"
-                          : transaction.kind === "income"
+                          : transaction.kind === "income" || transaction.kind === "refund"
                             ? "tabular-nums text-income"
                             : "tabular-nums text-muted-foreground"
                       }

@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { uniqueAccountSlug, toAccountSlug } from "@/lib/accounts";
+import { kindForMoneyIn } from "@/lib/categorizer";
 import { toISODate, todayISO } from "@/lib/dates";
 import { parseAmountToken } from "@/lib/money";
 import {
@@ -41,7 +42,7 @@ const VALUATION_HEADERS = ["id", "accountId", "account", "date", "value"] as con
 
 const ACCOUNT_TYPES = new Set<AccountType>(["bank", "cash", "savings", "investment", "crypto", "stock"]);
 const CATEGORY_KINDS = new Set<CategoryKind>(["expense", "income"]);
-const TRANSACTION_KINDS = new Set<TransactionKind>(["expense", "income", "transfer"]);
+const TRANSACTION_KINDS = new Set<TransactionKind>(["expense", "income", "transfer", "refund"]);
 const DEFAULT_CATEGORY_COLOR = "#64748b";
 const WORKBOOK_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -552,10 +553,12 @@ function planImport(parsed: ParsedWorkbook, ledger: LedgerSnapshot, defaultAccou
       : (category ?? resolveCategory(row.categoryId, row.category, row.kind === "income" ? "income" : "expense"));
     if (!resolvedCategory) continue;
 
+    const kind =
+      row.kind === "income" || row.kind === "refund" ? kindForMoneyIn(resolvedCategory) : row.kind;
     const transaction: Transaction = {
       id,
       amountCents: row.amountCents,
-      kind: row.kind,
+      kind,
       accountId: resolvedAccount.id,
       toAccountId,
       description: row.description,

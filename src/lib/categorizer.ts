@@ -1,4 +1,10 @@
-import { UNCATEGORIZED_ID, type Category, type CategorySource, type MerchantMemory } from "@/lib/types";
+import {
+  UNCATEGORIZED_ID,
+  type Category,
+  type CategorySource,
+  type MerchantMemory,
+  type TransactionKind,
+} from "@/lib/types";
 
 export interface CategoryResolution {
   categoryId: string;
@@ -56,4 +62,25 @@ export function resolveCategory(input: {
     categoryId: uncategorized?.id ?? UNCATEGORIZED_ID,
     source: "uncategorized",
   };
+}
+
+/** Active expense categories other than Uncategorized. Income and archived categories are not spending buckets. */
+export function isSpendingCategory(category: Category | undefined): boolean {
+  if (!category || category.isArchived) return false;
+  if (category.id === UNCATEGORIZED_ID) return false;
+  return category.kind === "expense";
+}
+
+/** Money in (`+`) reduces a spending category. Otherwise it is income. */
+export function kindForMoneyIn(category: Category | undefined): "income" | "refund" {
+  return isSpendingCategory(category) ? "refund" : "income";
+}
+
+/** Category edits keep the cash direction. Money out stays an expense; money in follows the new category. */
+export function kindAfterCategoryChange(
+  previousKind: TransactionKind,
+  category: Category | undefined,
+): TransactionKind {
+  if (previousKind === "expense" || previousKind === "transfer") return previousKind;
+  return kindForMoneyIn(category);
 }

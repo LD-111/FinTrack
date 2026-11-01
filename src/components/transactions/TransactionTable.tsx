@@ -8,7 +8,7 @@ import { formatAccountLabel } from "@/lib/accounts";
 import { currentYearMonth, formatDisplayDate } from "@/lib/dates";
 import { formatSignedMoney, parseAmountToken } from "@/lib/money";
 import { toMerchantKey } from "@/lib/utils";
-import type { CategoryKind, Transaction } from "@/lib/types";
+import type { Transaction } from "@/lib/types";
 
 export function TransactionTable() {
   const {
@@ -213,11 +213,7 @@ export function TransactionTable() {
                         <select
                           value={transaction.categoryId}
                           onChange={(event) => {
-                            const kind = (categoryById(event.target.value)?.kind ?? transaction.kind) as CategoryKind;
-                            void updateTransaction(transaction.id, {
-                              categoryId: event.target.value,
-                              kind,
-                            });
+                            void updateTransaction(transaction.id, { categoryId: event.target.value });
                           }}
                           className="h-8 w-full rounded-md border-0 bg-transparent text-sm"
                           style={{ color: category?.color }}
@@ -255,7 +251,7 @@ export function TransactionTable() {
                           className={
                             transaction.kind === "expense"
                               ? "text-expense"
-                              : transaction.kind === "income"
+                              : transaction.kind === "income" || transaction.kind === "refund"
                                 ? "text-income"
                                 : "text-muted-foreground"
                           }
