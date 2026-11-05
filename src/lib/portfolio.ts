@@ -106,8 +106,20 @@ function walkPortfolio(account: Account, transactions: Transaction[], logs: Valu
   for (const event of events) {
     if (event.kind === "transfer") {
       closePeriod();
-      principal += event.deltaCents;
-      value += event.deltaCents;
+      if (event.deltaCents >= 0 || value <= 0) {
+        principal += event.deltaCents;
+        value += event.deltaCents;
+      } else {
+        const withdrawn = -event.deltaCents;
+        if (withdrawn >= value) {
+          value -= withdrawn;
+          principal = value;
+        } else {
+          principal = Math.round((principal * (value - withdrawn)) / value);
+          value -= withdrawn;
+        }
+      }
+      if (value <= 0) growth = 1;
       periodStart = value;
     } else if (event.kind === "cash") {
       value += event.deltaCents;
