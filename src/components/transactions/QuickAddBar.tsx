@@ -1,15 +1,55 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { kindForMoneyIn } from "@/lib/categorizer";
-import { addDays, formatDisplayDate } from "@/lib/dates";
+import { addDays, formatDisplayDate, todayISO } from "@/lib/dates";
 import { formatSignedMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 type Chip = "category" | "account" | "date";
 
-export function QuickAddBar() {
+function PreviewChip({
+  capture,
+  pressed,
+  className,
+  style,
+  onPress,
+  children,
+}: {
+  capture: boolean;
+  pressed?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  onPress?: () => void;
+  children: ReactNode;
+}) {
+  const tone = cn(className, pressed && "ring-2 ring-ring");
+  if (!capture) {
+    return (
+      <Badge className={tone} style={style}>
+        {children}
+      </Badge>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex min-h-11 items-center rounded-full border px-3 py-1 text-sm font-medium",
+        tone,
+      )}
+      style={style}
+      aria-pressed={pressed}
+      onClick={onPress}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function QuickAddBar({ variant = "desktop" }: { variant?: "desktop" | "capture" }) {
+  const capture = variant === "capture";
   const { categories, accounts, transactions, merchantMemory, categoryById, accountById } = useLedger();
   const { settings } = useShell();
   const { quickAddRef, previewQuickAdd, addTransactionFromQuickAdd } = useFinanceActions();
@@ -47,6 +87,11 @@ export function QuickAddBar() {
         ? `${fromLabel} → ${toAccount.name}`
         : preview.description
       : preview.description;
+  const showPreview = Boolean(
+    value && preview.amountCents && preview.kind && date && (preview.valid || (isTransfer && preview.accountId)),
+  );
+  const destinations = usableAccounts.filter((item) => item.id !== accountId);
+  const accountChoices = isTransfer ? destinations : usableAccounts;
 
   useEffect(() => {
     setCategoryOverride(null);
@@ -71,7 +116,9 @@ export function QuickAddBar() {
     setToAccountOverride(null);
     setDateOverride(null);
     setActiveChip(null);
-    requestAnimationFrame(() => quickAddRef.current?.focus());
+    if (!capture) {
+      requestAnimationFrame(() => quickAddRef.current?.focus());
+    }
   }
 
   function cycleCategory(direction: 1 | -1) {
@@ -106,6 +153,16 @@ export function QuickAddBar() {
     const index = chips.indexOf(current);
     const nextIndex = (index + direction + chips.length) % chips.length;
     return chips[nextIndex] ?? null;
+  }
+
+  function toggleChip(chip: Chip) {
+    setActiveChip((current) => (current === chip ? null : chip));
+  }
+
+  function chooseAccount(id: string) {
+    if (isTransfer) setToAccountOverride(id);
+    else setAccountOverride(id);
+    setActiveChip(null);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -149,9 +206,15 @@ export function QuickAddBar() {
       : displayKind === "income" || displayKind === "refund"
         ? "border-income/30 text-income"
         : "text-muted-foreground";
+  const today = todayISO();
+  const dateChoices = [
+    { label: "Yesterday", value: addDays(today, -1) },
+    { label: "Today", value: today },
+    { label: "Tomorrow", value: addDays(today, 1) },
+  ];
 
   return (
-    <div className="border-b bg-card/90 px-5 py-4 backdrop-blur">
+    <div className="shrink-0 border-b bg-card/90 px-5 py-4 backdrop-blur">
       <label className="sr-only" htmlFor="quick-add">
         Quick add
       </label>
@@ -159,7 +222,7 @@ export function QuickAddBar() {
         id="quick-add"
         ref={quickAddRef}
         value={value}
-        autoFocus
+        autoFocus={!capture}
         autoComplete="off"
         spellCheck={false}
         placeholder="12.50 Chipotle #cash  ·  +2500 Salary  ·  500 #cash -> #savings"
@@ -167,49 +230,130 @@ export function QuickAddBar() {
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={onKeyDown}
       />
-      <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2 text-xs">
+      <div className={cn("mt-2 flex flex-wrap items-center gap-2 text-xs", capture ? "min-h-11" : "min-h-7")}>
         {!value && (
           <p className="text-muted-foreground">
-            Type an amount and a name, or 500 #cash to start a transfer. Tab edits chips.
+            {capture
+              ? "Type an amount and a name. Tap a chip to change it."
+              : "Type an amount and a name, or 500 #cash to start a transfer. Tab edits chips."}
           </p>
         )}
         {value && !preview.valid && !(isTransfer && toAccountOverride) && (
           <p className="text-destructive">{preview.reason}</p>
         )}
-        {value && preview.amountCents && preview.kind && date && (preview.valid || (isTransfer && preview.accountId)) && (
+        {showPreview && preview.amountCents && displayKind && date && (
           <>
             <Badge className={amountTone}>
-              {formatSignedMoney(preview.amountCents, displayKind ?? preview.kind, settings.currency, settings.locale)}
+              {formatSignedMoney(preview.amountCents, displayKind, settings.currency, settings.locale)}
             </Badge>
             {descriptionLabel && <Badge>{descriptionLabel}</Badge>}
             {!isTransfer && (
-              <Badge
-                className={cn(
-                  "cursor-default",
-                  preview.categorySource !== "explicit" && !categoryOverride && "opacity-70",
-                  activeChip === "category" && "ring-2 ring-ring",
-                )}
+              <PreviewChip
+                capture={capture}
+                pressed={activeChip === "category"}
+                className={cn(preview.categorySource !== "explicit" && !categoryOverride && "opacity-70")}
                 style={category ? { borderColor: category.color, color: category.color } : undefined}
+                onPress={() => toggleChip("category")}
               >
                 {category?.name ?? "Uncategorized"}
-              </Badge>
+              </PreviewChip>
             )}
             {displayKind === "refund" && <Badge className="border-income/30 text-income">Refund</Badge>}
-            <Badge
-              className={cn(
-                "cursor-default",
-                isTransfer && preview.toAccountSource === "memory" && !toAccountOverride && "opacity-70",
-                activeChip === "account" && "ring-2 ring-ring",
-              )}
+            <PreviewChip
+              capture={capture}
+              pressed={activeChip === "account"}
+              className={cn(isTransfer && preview.toAccountSource === "memory" && !toAccountOverride && "opacity-70")}
+              onPress={() => toggleChip("account")}
             >
               {isTransfer ? `${fromLabel} → ${toAccount?.name ?? "…"}` : (account?.name ?? preview.accountName ?? "Account")}
-            </Badge>
-            <Badge className={cn(activeChip === "date" && "ring-2 ring-ring")}>
+            </PreviewChip>
+            <PreviewChip
+              capture={capture}
+              pressed={activeChip === "date"}
+              onPress={() => toggleChip("date")}
+            >
               {formatDisplayDate(date, settings.locale)}
-            </Badge>
+            </PreviewChip>
           </>
         )}
       </div>
+      {capture && showPreview && activeChip === "category" && (
+        <div className="mt-3 flex max-h-52 flex-col gap-1 overflow-y-auto">
+          {usableCategories.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={cn(
+                "flex min-h-11 items-center rounded-md px-3 text-left text-sm",
+                item.id === categoryId ? "bg-accent text-accent-foreground" : "hover:bg-muted",
+              )}
+              onClick={() => {
+                setCategoryOverride(item.id);
+                setActiveChip(null);
+              }}
+            >
+              {item.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {capture && showPreview && activeChip === "account" && (
+        <div className="mt-3 flex max-h-52 flex-col gap-1 overflow-y-auto">
+          {accountChoices.length === 0 && (
+            <p className="px-3 text-sm text-muted-foreground">No other account</p>
+          )}
+          {accountChoices.map((item) => {
+            const selected = item.id === (isTransfer ? toAccountId : accountId);
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "flex min-h-11 items-center rounded-md px-3 text-left text-sm",
+                  selected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
+                )}
+                onClick={() => chooseAccount(item.id)}
+              >
+                {item.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {capture && showPreview && activeChip === "date" && date && (
+        <div className="mt-3 flex flex-col gap-1">
+          {dateChoices.map((choice) => (
+            <button
+              key={choice.label}
+              type="button"
+              className={cn(
+                "flex min-h-11 items-center justify-between rounded-md px-3 text-left text-sm",
+                choice.value === date ? "bg-accent text-accent-foreground" : "hover:bg-muted",
+              )}
+              onClick={() => {
+                setDateOverride(choice.value);
+                setActiveChip(null);
+              }}
+            >
+              <span>{choice.label}</span>
+              <span className="text-muted-foreground">{formatDisplayDate(choice.value, settings.locale)}</span>
+            </button>
+          ))}
+          <label className="flex min-h-11 items-center gap-3 px-3 text-sm">
+            <span className="text-muted-foreground">Date</span>
+            <input
+              type="date"
+              value={date}
+              className="min-h-11 flex-1 bg-transparent"
+              onChange={(event) => {
+                if (!event.target.value) return;
+                setDateOverride(event.target.value);
+                setActiveChip(null);
+              }}
+            />
+          </label>
+        </div>
+      )}
     </div>
   );
 }

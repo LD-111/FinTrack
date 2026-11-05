@@ -1,4 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { CaptureView } from "@/components/capture/CaptureView";
+import { useCaptureShell } from "@/components/layout/useCaptureShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { SplashScreen } from "@/components/layout/SplashScreen";
 import { BudgetView } from "@/components/budgets/BudgetView";
@@ -17,9 +19,12 @@ const splashStartedAt = performance.now();
 export default function App() {
   const { hydrated, view } = useShell();
   const { setView, undo, focusQuickAdd } = useFinanceActions();
+  const capture = useCaptureShell();
   const [splash, setSplash] = useState<"hold" | "exit" | "gone">("hold");
 
   useEffect(() => {
+    if (capture === null) return;
+
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       const inField =
@@ -47,19 +52,18 @@ export default function App() {
         return;
       }
 
-      if (!inField && !document.querySelector("[data-account-manager]")) {
-        if (event.key === "1") setView("dashboard");
-        if (event.key === "2") setView("transactions");
-        if (event.key === "3") setView("budgets");
-      }
+      if (capture || inField || document.querySelector("[data-account-manager]")) return;
+      if (event.key === "1") setView("dashboard");
+      if (event.key === "2") setView("transactions");
+      if (event.key === "3") setView("budgets");
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusQuickAdd, setView, undo]);
+  }, [capture, focusQuickAdd, setView, undo]);
 
   useEffect(() => {
-    if (!hydrated || splash !== "hold") return;
+    if (!hydrated || capture === null || splash !== "hold") return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setSplash("gone");
       return;
@@ -67,7 +71,7 @@ export default function App() {
     const wait = Math.max(0, SPLASH_HOLD_MS - (performance.now() - splashStartedAt));
     const timer = window.setTimeout(() => setSplash("exit"), wait);
     return () => window.clearTimeout(timer);
-  }, [hydrated, splash]);
+  }, [capture, hydrated, splash]);
 
   useEffect(() => {
     if (splash !== "exit") return;
@@ -78,7 +82,7 @@ export default function App() {
   return (
     <div className="relative h-full">
       <div className="flex h-full">
-        {hydrated && (
+        {hydrated && capture === false && (
           <>
             <Sidebar />
             <main className="flex min-w-0 flex-1 flex-col">
@@ -97,6 +101,7 @@ export default function App() {
             </main>
           </>
         )}
+        {hydrated && capture === true && <CaptureView />}
       </div>
       {splash !== "gone" && (
         <SplashScreen exiting={splash === "exit"} onExited={() => setSplash("gone")} />

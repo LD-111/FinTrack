@@ -17,6 +17,7 @@ import {
   suggestTransferDestination,
   uniqueAccountSlug,
 } from "@/lib/accounts";
+import { isNativeMobile } from "@/lib/shell";
 import { toast } from "@/lib/toast";
 import { isSpendingCategory, kindAfterCategoryChange, kindForMoneyIn, resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth, todayISO } from "@/lib/dates";
@@ -916,7 +917,20 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         budgets: budgetsRef.current,
         valuationLogs: valuationLogsRef.current,
       };
-      void import("@/lib/excel").then(({ downloadWorkbook }) => downloadWorkbook(ledger));
+      void (async () => {
+        if (await isNativeMobile()) {
+          try {
+            const { buildWorkbook } = await import("@/lib/excel");
+            const { saveWorkbookFile } = await import("@/lib/workbookFile");
+            await saveWorkbookFile(buildWorkbook(ledger));
+          } catch {
+            toast("Could not save the workbook");
+          }
+          return;
+        }
+        const { downloadWorkbook } = await import("@/lib/excel");
+        downloadWorkbook(ledger);
+      })();
     }
 
     async function importWorkbook(data: ArrayBuffer) {

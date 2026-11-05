@@ -61,4 +61,42 @@ describe("planWorkbookImport", () => {
     expect(second.skipped.categories).toBe(1);
     expect(second.skipped.transactions).toBe(1);
   });
+
+  it("inserts only the new meal when a phone export is planned onto the desktop ledger", () => {
+    const account = makeAccount({ id: "acct_cash", name: "Cash", type: "cash", slug: "cash" });
+    const category = makeCategory({ id: "cat_food", name: "Food", kind: "expense" });
+    const lunch = makeTransaction({
+      id: "tx_lunch",
+      accountId: account.id,
+      categoryId: category.id,
+      amountCents: 1_250,
+      description: "Lunch",
+      date: "2026-10-15",
+    });
+    const dinner = makeTransaction({
+      id: "tx_dinner",
+      accountId: account.id,
+      categoryId: category.id,
+      amountCents: 4_200,
+      description: "Dinner",
+      date: "2026-10-16",
+    });
+    const desktop: LedgerSnapshot = {
+      accounts: [account],
+      categories: [category],
+      transactions: [lunch],
+      budgets: [],
+      valuationLogs: [],
+    };
+    const phone: LedgerSnapshot = { ...desktop, transactions: [lunch, dinner] };
+
+    const plan = planWorkbookImport(buildWorkbook(phone), desktop, account.id);
+
+    expect(plan.issues).toEqual([]);
+    expect(plan.accounts).toHaveLength(0);
+    expect(plan.categories).toHaveLength(0);
+    expect(plan.transactions.map((row) => row.id)).toEqual(["tx_dinner"]);
+    expect(plan.transactions[0]).toMatchObject({ amountCents: 4_200, description: "Dinner" });
+    expect(plan.skipped.transactions).toBe(1);
+  });
 });
