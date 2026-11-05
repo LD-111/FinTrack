@@ -54,6 +54,8 @@ npm run build         # production frontend → dist/
 npm run tauri build   # installer; binary is FinTrack.exe on Windows
 ```
 
+On Windows, each `npm run tauri build` gives the MSI a newer version and the same upgrade identity. Running that MSI replaces the FinTrack already installed and leaves the ledger in place. Uninstall only when you want to discard the app, not between test builds.
+
 On first launch the app seeds a Cash account, a USD / en-US setting, and a small set of income and expense categories.
 
 ## Logging a transaction

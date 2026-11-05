@@ -9,6 +9,7 @@ Keep `tauri.conf.json` aligned with Vite:
 - `beforeDevCommand` / `beforeBuildCommand`: `npm run dev` / `npm run build`
 - Window: 1280×800, min 960×640, title FinTrack, identifier `com.fintrack.app`
 - `tauri.android.conf.json` replaces that window with a title-only phone window so the 960×640 minimum stays on the desktop.
+- Windows MSI upgrades: `bundle.windows.wix.upgradeCode` is pinned and `allowDowngrades` is true. `npm run tauri build` on Windows writes gitignored `tauri.windows.conf.json` with the next `wix.version` (`0.1.N`) before the CLI starts, and records that count in gitignored `.msi-build` only after the build succeeds. The installed app is replaced and the WebView ledger is left in place. Do not hand-edit `version` for a test install.
 
 Android project: from WSL `Ubuntu-22.04`, `npm run tauri android init -- --ci` writes `gen/android` (gitignored with the rest of `gen`). `npm run tauri android build -- --debug --apk` writes the debug APK under `gen/android/app/build/outputs/apk/`. Set `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`, `ANDROID_HOME=/usr/lib/android-sdk`, and `NDK_HOME=/usr/lib/android-sdk/ndk/26.1.10909125` in that distro. iOS init is macOS-only.
 

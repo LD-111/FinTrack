@@ -13,6 +13,8 @@ dist-ssr
 *.local
 src-tauri/target
 src-tauri/gen
+src-tauri/.msi-build
+src-tauri/tauri.windows.conf.json
 
 # Editor directories and files
 .vscode/*

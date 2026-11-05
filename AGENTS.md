@@ -32,7 +32,7 @@ Portfolio current value = latest valuation log, plus later transfers, income, an
 - UI only: `npm run dev` (Vite on http://localhost:1420, `strictPort: true`)
 - Desktop: `npm run tauri dev`
 - Production frontend: `npm run build` → `dist/`
-- Installer: `npm run tauri build` (binary `FinTrack.exe`)
+- Installer: `npm run tauri build` (binary `FinTrack.exe`). On Windows this writes the next MSI version (`0.1.N`, from the app major.minor plus a local counter in gitignored `src-tauri/.msi-build`) into gitignored `src-tauri/tauri.windows.conf.json` before Tauri bundles. The WiX upgrade code stays pinned in `tauri.conf.json`. Run the new MSI to replace the installed app. The ledger stays in the WebView data for `com.fintrack.app`. Do not uninstall between test builds, and do not bump `version` by hand for one. A failed build does not consume the counter. Call this through `npm run tauri build` so the version is written; invoking the Tauri binary directly skips it.
 - Android debug APK, from WSL `Ubuntu-22.04` in `/mnt/c/Projects/FinTrack`: `npm run tauri android init -- --ci` once, then `npm run tauri android build -- --debug --apk`. The APK is under `src-tauri/gen/android/app/build/outputs/apk/`. That distro needs `JAVA_HOME` (`/usr/lib/jvm/java-17-openjdk-amd64`), `ANDROID_HOME` (`/usr/lib/android-sdk`), `NDK_HOME` (`/usr/lib/android-sdk/ndk/26.1.10909125`), and the four Android Rust targets. `src-tauri/gen` is gitignored, so init is local. iOS init needs a Mac.
 
 ## Testing
