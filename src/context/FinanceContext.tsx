@@ -17,7 +17,7 @@ import {
   suggestTransferDestination,
   uniqueAccountSlug,
 } from "@/lib/accounts";
-import { isNativeMobile } from "@/lib/shell";
+import { isTauriRuntime } from "@/lib/shell";
 import { toast } from "@/lib/toast";
 import { isSpendingCategory, kindAfterCategoryChange, kindForMoneyIn, resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth, todayISO } from "@/lib/dates";
@@ -929,11 +929,14 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         valuationLogs: valuationLogsRef.current,
       };
       void (async () => {
-        if (await isNativeMobile()) {
+        if (isTauriRuntime()) {
           try {
             const { buildWorkbook } = await import("@/lib/excel");
             const { saveWorkbookFile } = await import("@/lib/workbookFile");
-            await saveWorkbookFile(buildWorkbook(ledger));
+            const path = await saveWorkbookFile(buildWorkbook(ledger));
+            if (!path) return;
+            const name = path.split(/[/\\]/).pop() || path;
+            toast("Exported", { description: name });
           } catch {
             toast("Could not save the workbook");
           }
@@ -941,6 +944,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         }
         const { downloadWorkbook } = await import("@/lib/excel");
         downloadWorkbook(ledger);
+        toast("Exported", { description: `fintrack-${todayISO()}.xlsx` });
       })();
     }
 

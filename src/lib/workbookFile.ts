@@ -6,14 +6,14 @@ const SPREADSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml
 
 const FILTERS = [{ name: "Spreadsheet", extensions: ["xlsx", SPREADSHEET] }];
 
-export async function saveWorkbookFile(bytes: ArrayBuffer): Promise<boolean> {
+export async function saveWorkbookFile(bytes: ArrayBuffer): Promise<string | null> {
   const path = await save({
     defaultPath: `fintrack-${todayISO()}.xlsx`,
     filters: FILTERS,
   });
-  if (typeof path !== "string") return false;
+  if (typeof path !== "string") return null;
   await writeFile(path, new Uint8Array(bytes));
-  return true;
+  return path;
 }
 
 export async function pickWorkbookFile(): Promise<ArrayBuffer | null> {
