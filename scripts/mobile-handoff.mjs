@@ -9,9 +9,38 @@ const IOS_KEYS = [
   ["NSLocalNetworkUsageDescription", "FinTrack connects to your computer on the local network to bring transactions home."],
 ];
 
+const LAUNCHER_ICONS = [
+  ["icons/android", "gen/android/app/src/main/res"],
+  ["icons/ios", "gen/apple/Assets.xcassets/AppIcon.appiconset"],
+];
+
 export function patchMobileHandoff(root) {
+  installLauncherIcons(root);
   patchAndroid(path.join(root, "src-tauri", "gen", "android"));
   patchApple(path.join(root, "src-tauri", "gen", "apple"));
+}
+
+function installLauncherIcons(root) {
+  const tauri = path.join(root, "src-tauri");
+  for (const [from, to] of LAUNCHER_ICONS) {
+    const source = path.join(tauri, from);
+    const dest = path.join(tauri, to);
+    if (!fs.existsSync(source) || !fs.existsSync(dest)) continue;
+    copyTree(source, dest);
+  }
+}
+
+function copyTree(from, to) {
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name);
+    const dest = path.join(to, entry.name);
+    if (entry.isDirectory()) {
+      fs.mkdirSync(dest, { recursive: true });
+      copyTree(src, dest);
+    } else {
+      fs.copyFileSync(src, dest);
+    }
+  }
 }
 
 function patchAndroid(dir) {
