@@ -1,3 +1,7 @@
+mod handoff;
+
+use std::sync::Mutex;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -11,7 +15,14 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(Mutex::new(handoff::HandoffHost::default()))
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            handoff::start_handoff,
+            handoff::stop_handoff,
+            handoff::complete_handoff,
+            handoff::send_handoff
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

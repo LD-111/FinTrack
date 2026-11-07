@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { LayoutDashboard, List, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { HandoffDialog } from "@/components/layout/HandoffDialog";
 import { ManageAccountsDialog } from "@/components/layout/ManageAccountsDialog";
 import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { isPortfolioAccount, matchAccountsByName } from "@/lib/accounts";
@@ -42,6 +43,7 @@ export function Sidebar() {
   const importRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const [managing, setManaging] = useState(false);
+  const [handoff, setHandoff] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("bank");
   const [opening, setOpening] = useState("");
@@ -264,7 +266,17 @@ export function Sidebar() {
       </div>
       <ManageAccountsDialog open={managing} onClose={() => setManaging(false)} />
 
-      <div className="flex gap-2 border-t border-sidebar-border px-3 py-3">
+      <div className="border-t border-sidebar-border px-3 py-3">
+        <Button
+          type="button"
+          variant="sidebar"
+          size="sm"
+          className="mb-2 w-full border border-sidebar-border text-xs"
+          onClick={() => setHandoff(true)}
+        >
+          From phone
+        </Button>
+        <div className="flex gap-2">
         <Button
           type="button"
           variant="sidebar"
@@ -295,7 +307,9 @@ export function Sidebar() {
             void file.arrayBuffer().then((buffer) => importWorkbook(buffer));
           }}
         />
+        </div>
       </div>
+      <HandoffDialog open={handoff} onClose={() => setHandoff(false)} />
 
       <div className="border-t border-sidebar-border px-4 py-4">
         <p className="text-xs text-sidebar-foreground/55">

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-handoff"
+description = "Lets the desktop listen for one phone session and lets the phone post its ledger."
+commands.allow = ["start_handoff", "stop_handoff", "complete_handoff", "send_handoff"]

@@ -262,6 +262,14 @@ export function planWorkbookImport(data: ArrayBuffer, ledger: LedgerSnapshot, de
   return planImport(parseWorkbook(data), ledger, defaultAccountId);
 }
 
+export function planSessionImport(
+  incoming: LedgerSnapshot,
+  ledger: LedgerSnapshot,
+  defaultAccountId: string,
+): ImportPlan {
+  return planImport(snapshotToParsed(incoming), ledger, defaultAccountId);
+}
+
 export function summarizeImport(plan: ImportPlan): { title: string; description?: string } {
   const added = [
     countLabel(plan.accounts.length, "account", "accounts"),
@@ -642,6 +650,65 @@ function planImport(parsed: ParsedWorkbook, ledger: LedgerSnapshot, defaultAccou
     valuationLogs: newValuations,
     skipped,
     issues,
+  };
+}
+
+function snapshotToParsed(snapshot: LedgerSnapshot): ParsedWorkbook {
+  const accountName = indexById(snapshot.accounts);
+  const categoryName = indexById(snapshot.categories);
+  return {
+    accounts: snapshot.accounts.map((account, index) => ({
+      row: index + 1,
+      id: account.id,
+      name: account.name,
+      type: account.type,
+      slug: account.slug,
+      openingBalanceCents: account.openingBalanceCents,
+      isArchived: account.isArchived,
+    })),
+    categories: snapshot.categories.map((category, index) => ({
+      row: index + 1,
+      id: category.id,
+      name: category.name,
+      kind: category.kind,
+      color: category.color,
+      icon: category.icon ?? "",
+      parentId: category.parentId ?? "",
+      isArchived: category.isArchived,
+    })),
+    transactions: snapshot.transactions.map((transaction, index) => ({
+      row: index + 1,
+      id: transaction.id,
+      date: transaction.date,
+      kind: transaction.kind,
+      amountCents: transaction.amountCents,
+      description: transaction.description,
+      accountId: transaction.accountId,
+      account: accountName.get(transaction.accountId) ?? "",
+      toAccountId: transaction.toAccountId ?? "",
+      toAccount: transaction.toAccountId ? (accountName.get(transaction.toAccountId) ?? "") : "",
+      categoryId: transaction.categoryId,
+      category: categoryName.get(transaction.categoryId) ?? "",
+      notes: transaction.notes ?? "",
+      merchantKey: transaction.merchantKey,
+    })),
+    budgets: snapshot.budgets.map((budget, index) => ({
+      row: index + 1,
+      id: budget.id,
+      categoryId: budget.categoryId,
+      category: categoryName.get(budget.categoryId) ?? "",
+      amountCents: budget.amountCents,
+      period: budget.period,
+    })),
+    valuations: snapshot.valuationLogs.map((log, index) => ({
+      row: index + 1,
+      id: log.id,
+      accountId: log.accountId,
+      account: accountName.get(log.accountId) ?? "",
+      date: log.date,
+      valueCents: log.valueCents,
+    })),
+    issues: [],
   };
 }
 

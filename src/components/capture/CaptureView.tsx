@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SendToComputer } from "@/components/capture/SendToComputer";
 import { QuickAddBar } from "@/components/transactions/QuickAddBar";
 import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { formatMonthLabel, todayISO } from "@/lib/dates";
@@ -26,6 +27,7 @@ export function CaptureView() {
   const { exportWorkbook, importWorkbook, undo } = useFinanceActions();
   const importRef = useRef<HTMLInputElement>(null);
   const [dismissed, setDismissed] = useState(readDismissed);
+  const [sheet, setSheet] = useState<null | "send" | "setup">(null);
 
   const activeAccounts = accounts.filter((account) => !account.isArchived);
   const freshSeed =
@@ -67,6 +69,9 @@ export function CaptureView() {
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
         <p className="text-base font-semibold">FinTrack</p>
         <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" className="min-h-11" onClick={() => setSheet("send")}>
+            Send to computer
+          </Button>
           <Button type="button" variant="outline" className="min-h-11" onClick={() => exportWorkbook()}>
             Export
           </Button>
@@ -80,9 +85,12 @@ export function CaptureView() {
       </header>
       {showBanner && (
         <div className="border-b bg-accent px-4 py-3 text-sm text-accent-foreground">
-          <p>Import a desktop export before the first log, so account names match.</p>
+          <p>Set up from the computer on this Wi-Fi, or import a desktop export, so account names match.</p>
           <div className="mt-3 flex gap-2">
-            <Button type="button" className="min-h-11" onClick={() => void importLedger()}>
+            <Button type="button" className="min-h-11" onClick={() => setSheet("setup")}>
+              Set up from computer
+            </Button>
+            <Button type="button" variant="outline" className="min-h-11" onClick={() => void importLedger()}>
               Import
             </Button>
             <Button type="button" variant="outline" className="min-h-11" onClick={dismissBanner}>
@@ -143,6 +151,11 @@ export function CaptureView() {
           </ul>
         )}
       </section>
+      <SendToComputer
+        open={sheet !== null}
+        title={sheet === "setup" ? "Set up from computer" : "Send to computer"}
+        onClose={() => setSheet(null)}
+      />
       <input
         ref={importRef}
         type="file"

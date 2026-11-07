@@ -52,7 +52,7 @@ export default function App() {
         return;
       }
 
-      if (capture || inField || document.querySelector("[data-account-manager]")) return;
+      if (capture || inField || document.querySelector("[data-account-manager], [data-handoff]")) return;
       if (event.key === "1") setView("dashboard");
       if (event.key === "2") setView("transactions");
       if (event.key === "3") setView("budgets");

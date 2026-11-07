@@ -22,6 +22,7 @@ import { toast } from "@/lib/toast";
 import { isSpendingCategory, kindAfterCategoryChange, kindForMoneyIn, resolveCategory } from "@/lib/categorizer";
 import { currentYearMonth, todayISO } from "@/lib/dates";
 import { db } from "@/lib/db";
+import type { ImportPlan, LedgerSnapshot } from "@/lib/excel";
 import {
   accountBalances as deriveAccountBalances,
   categorySpendForMonth,
@@ -136,6 +137,16 @@ interface FinanceActions {
   undo: () => Promise<boolean>;
   exportWorkbook: () => void;
   importWorkbook: (data: ArrayBuffer) => Promise<void>;
+  importLedgerSnapshot: (snapshot: LedgerSnapshot) => Promise<{
+    status: "empty" | "saved" | "failed";
+    summary: { title: string; description?: string };
+  }>;
+  receiveHandoff: (snapshot: LedgerSnapshot) => Promise<{
+    status: "empty" | "saved" | "failed";
+    summary: { title: string; description?: string };
+    accounts: Account[];
+    categories: Category[];
+  }>;
   focusQuickAdd: () => void;
 }
 
@@ -933,35 +944,26 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       })();
     }
 
-    async function importWorkbook(data: ArrayBuffer) {
-      const { planWorkbookImport, summarizeImport } = await import("@/lib/excel");
-      const plan = planWorkbookImport(
-        data,
-        {
-          accounts: accountsRef.current,
-          categories: categoriesRef.current,
-          transactions: transactionsRef.current,
-          budgets: budgetsRef.current,
-          valuationLogs: valuationLogsRef.current,
-        },
-        settingsRef.current.defaultAccountId,
-      );
+    function currentLedger(): LedgerSnapshot {
+      return {
+        accounts: accountsRef.current,
+        categories: categoriesRef.current,
+        transactions: transactionsRef.current,
+        budgets: budgetsRef.current,
+        valuationLogs: valuationLogsRef.current,
+      };
+    }
+
+    async function commitImportPlan(
+      plan: ImportPlan,
+    ): Promise<{ status: "empty" } | { status: "failed" } | { status: "saved"; undo: Extract<UndoItem, { type: "import" }> }> {
       const inserted =
         plan.accounts.length +
         plan.categories.length +
         plan.transactions.length +
         plan.budgets.length +
         plan.valuationLogs.length;
-      const summary = summarizeImport(plan);
-      if (inserted === 0) {
-        toast(summary.title, { description: summary.description, duration: 6000 });
-        return;
-      }
-      commitCategories([...categoriesRef.current, ...plan.categories]);
-      commitAccounts([...accountsRef.current, ...plan.accounts]);
-      commitTransactions([...transactionsRef.current, ...plan.transactions].sort(compareTransactionsDesc));
-      commitBudgets([...budgetsRef.current, ...plan.budgets]);
-      commitLogs([...valuationLogsRef.current, ...plan.valuationLogs]);
+      if (inserted === 0) return { status: "empty" };
       const undoItem: Extract<UndoItem, { type: "import" }> = {
         type: "import",
         accountIds: plan.accounts.map((account) => account.id),
@@ -970,6 +972,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
         budgetIds: plan.budgets.map((budget) => budget.id),
         valuationIds: plan.valuationLogs.map((log) => log.id),
       };
+      commitCategories([...categoriesRef.current, ...plan.categories]);
+      commitAccounts([...accountsRef.current, ...plan.accounts]);
+      commitTransactions([...transactionsRef.current, ...plan.transactions].sort(compareTransactionsDesc));
+      commitBudgets([...budgetsRef.current, ...plan.budgets]);
+      commitLogs([...valuationLogsRef.current, ...plan.valuationLogs]);
       try {
         await db.transaction("rw", db.accounts, db.categories, db.transactions, db.budgets, db.valuationLogs, async () => {
           if (plan.categories.length > 0) await db.categories.bulkAdd(plan.categories);
@@ -981,14 +988,62 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       } catch {
         await revertUndoItem(undoItem);
         toast("Import failed", { description: "Could not save the imported rows" });
-        return;
+        return { status: "failed" };
       }
       pushUndo(undoItem);
-      toast(summary.title, {
-        description: summary.description,
-        duration: 6000,
-        action: { label: "Undo", onClick: () => undoItemFromToast(undoItem, revertUndoItem) },
-      });
+      return { status: "saved", undo: undoItem };
+    }
+
+    function toastImport(
+      summary: { title: string; description?: string },
+      result: { status: "empty" } | { status: "failed" } | { status: "saved"; undo: Extract<UndoItem, { type: "import" }> },
+    ) {
+      if (result.status === "empty") {
+        toast(summary.title, { description: summary.description, duration: 6000 });
+        return;
+      }
+      if (result.status === "saved") {
+        const undo = result.undo;
+        toast(summary.title, {
+          description: summary.description,
+          duration: 6000,
+          action: { label: "Undo", onClick: () => undoItemFromToast(undo, revertUndoItem) },
+        });
+      }
+    }
+
+    async function importWorkbook(data: ArrayBuffer) {
+      const { planWorkbookImport, summarizeImport } = await import("@/lib/excel");
+      const plan = planWorkbookImport(data, currentLedger(), settingsRef.current.defaultAccountId);
+      const summary = summarizeImport(plan);
+      toastImport(summary, await commitImportPlan(plan));
+    }
+
+    async function commitSnapshot(snapshot: LedgerSnapshot) {
+      const { planSessionImport, summarizeImport } = await import("@/lib/excel");
+      const ledger = currentLedger();
+      const plan = planSessionImport(snapshot, ledger, settingsRef.current.defaultAccountId);
+      const summary = summarizeImport(plan);
+      const result = await commitImportPlan(plan);
+      if (result.status === "saved") toastImport(summary, result);
+      return { status: result.status, summary, ledger };
+    }
+
+    async function importLedgerSnapshot(snapshot: LedgerSnapshot) {
+      const result = await commitSnapshot(snapshot);
+      return { status: result.status, summary: result.summary };
+    }
+
+    async function receiveHandoff(snapshot: LedgerSnapshot) {
+      const { handoffSeed } = await import("@/lib/handoff");
+      const result = await commitSnapshot(snapshot);
+      const seed = handoffSeed(result.ledger, snapshot);
+      return {
+        status: result.status,
+        summary: result.summary,
+        accounts: seed.accounts,
+        categories: seed.categories,
+      };
     }
 
     async function undo() {
@@ -1021,6 +1076,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       undo,
       exportWorkbook,
       importWorkbook,
+      importLedgerSnapshot,
+      receiveHandoff,
       focusQuickAdd: () => {
         quickAddRef.current?.focus();
         quickAddRef.current?.select();
