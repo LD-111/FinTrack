@@ -84,6 +84,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: FinTrack v__VERSION__
@@ -93,6 +95,8 @@ jobs:
             - Windows: the setup `.exe`, or the `.msi`
             - macOS: the `.dmg` for Apple silicon (`aarch64`) or Intel (`x64`)
             - Linux: the `.AppImage`, or the `.deb` / `.rpm` package
+
+            The in-app update is optional. FinTrack can stay on this version.
 
             The installers are unsigned. Windows SmartScreen and macOS Gatekeeper ask you to confirm the first launch.
           releaseDraft: false

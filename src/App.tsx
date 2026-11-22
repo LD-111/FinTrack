@@ -84,7 +84,7 @@ export default function App() {
       <div className="flex h-full">
         {hydrated && capture === false && (
           <>
-            <Sidebar />
+            <Sidebar updatesReady={splash === "gone"} />
             <main className="flex min-w-0 flex-1 flex-col">
               <QuickAddBar />
               {view === "dashboard" && (

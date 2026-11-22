@@ -39,5 +39,16 @@
         "upgradeCode": "27A2CD43-3604-535C-8964-039EC1CD1FEE"
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcyMjQyNzI3M0QzQUQ3M0IKUldRNzF6bzlKeWNrY2wwRDZpZGdoNDNVZmc4VUJiVWVKSWlvd2tpZnY1MW4rZSs1eFVDQXU5TmIK",
+      "endpoints": [
+        "https://github.com/LD-111/FinTrack/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

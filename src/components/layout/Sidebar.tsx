@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { HandoffDialog } from "@/components/layout/HandoffDialog";
 import { ManageAccountsDialog } from "@/components/layout/ManageAccountsDialog";
+import { UpdateNotice } from "@/components/layout/UpdateNotice";
+import { canCheckForUpdates } from "@/lib/appUpdate";
 import { useFinanceActions, useLedger, useShell } from "@/context/FinanceContext";
 import { isPortfolioAccount, matchAccountsByName } from "@/lib/accounts";
 import { formatMonthLabel } from "@/lib/dates";
@@ -26,7 +28,7 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
   { value: "stock", label: "Stock" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ updatesReady = false }: { updatesReady?: boolean }) {
   const { view, selectedMonth, settings, accountFilter, dashboardTab, selectedPortfolioAccountId } = useShell();
   const { monthSummary, accountBalances, accounts } = useLedger();
   const {
@@ -308,6 +310,7 @@ export function Sidebar() {
           }}
         />
         </div>
+        {canCheckForUpdates() && <UpdateNotice ready={updatesReady} />}
       </div>
       <HandoffDialog open={handoff} onClose={() => setHandoff(false)} />
 
