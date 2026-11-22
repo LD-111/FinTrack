@@ -8,6 +8,18 @@ Local-first personal finance for the desktop. Type a transaction, press Enter, a
 
 FinTrack is a keyboard-first alternative to a spreadsheet. The packaged app is a [Tauri](https://v2.tauri.app/) window around a static web UI. Every record lives in IndexedDB on the machine that runs it.
 
+## Download
+
+The latest desktop installers are on the [releases page](https://github.com/LD-111/FinTrack/releases/latest).
+
+| System | Installer |
+| --- | --- |
+| Windows | Setup `.exe`, or the `.msi` |
+| macOS | `.dmg` for Apple silicon (`aarch64`) or Intel (`x64`) |
+| Linux | `.AppImage`, or the `.deb` / `.rpm` package |
+
+The installers are unsigned. Windows SmartScreen and macOS Gatekeeper ask you to confirm the first launch.
+
 <p align="center">
   <img src="docs/screenshots/cashflow.png" alt="Cashflow dashboard showing October income, spend, net, and category share" />
 </p>
@@ -43,6 +55,8 @@ FinTrack is a keyboard-first alternative to a spreadsheet. The packaged app is a
 </p>
 
 ## Getting started
+
+Installers are on the [releases page](https://github.com/LD-111/FinTrack/releases/latest). The commands below compile the app from source.
 
 You need [Node.js](https://nodejs.org/) and npm. The desktop window also needs the [Rust toolchain and Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS (on Windows, that includes the Microsoft C++ build tools and WebView2).
 
